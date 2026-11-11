@@ -81,9 +81,6 @@ def test_the_findings_are_sent_and_the_spec_is_not():
 
 
 def test_a_broken_brief_converges_in_one_round():
-    from h3ir.compile import MAX_FIX_ROUNDS
-    assert MAX_FIX_ROUNDS == 2, "capped, like the truncation ladder"
-
     broken = "Here is your brief:\n\n" + GOOD.replace("[Shot 1] A wide",
                                                       "[Shot 1] At 00:00.000, A wide")
     ctx = Context(n_pictures=1, duration_s=8.0)

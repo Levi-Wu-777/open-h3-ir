@@ -32,7 +32,7 @@ log = logging.getLogger("h3ir.compile")
 
 IR_VERSION = "1"
 
-MAX_FIX_ROUNDS = 2
+MAX_FIX_ROUNDS = 1
 
 
 class CompilerInvariantError(RuntimeError):

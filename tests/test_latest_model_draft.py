@@ -45,39 +45,37 @@ def _compile(backend):
                                   backend=backend)
 
 
-def test_two_unsuccessful_revisions_return_c_and_send_b_into_the_second_revision():
-    first, second = [_text(version, sound=False) for version in ("Alice", "Beatrice")]
-    final = _text("Cora").replace("[Shot 1]", "[Shot 1] At 00:00.000,")
-    backend = ScriptedBackend(first, second, final)
+def test_one_unsuccessful_revision_returns_latest_draft_without_a_second_revision():
+    first = _text("Alice", sound=False)
+    final = _text("Beatrice").replace("[Shot 1]", "[Shot 1] At 00:00.000,")
+    backend = ScriptedBackend(first, final, _text("Cora"))
     doc = _compile(backend)
     assert doc.prompt == final
-    assert doc.sections["integrated_multimodal_description"].strip().endswith("Cora opens a door.")
+    assert doc.sections["integrated_multimodal_description"].strip().endswith("Beatrice opens a door.")
     assert doc.source == "written"
     assert doc.fallback_reason is None
     assert doc.fell_back is False
     assert doc.ok is False
     assert {finding.rule for finding in doc.errors} == {"T2-shot1-timestamp"}
-    assert doc.provenance["fix_rounds"] == 2
-    assert len(backend.messages) == 3
+    assert doc.provenance["fix_rounds"] == 1
+    assert len(backend.messages) == 2
+    assert backend.responses == [_text("Cora")]
     assert "YOUR TEXT\n" + first in backend.messages[1][-1]["content"]
-    assert "YOUR TEXT\n" + second in backend.messages[2][-1]["content"]
-    assert "Alice opens a door" not in backend.messages[2][-1]["content"]
 
 
-@pytest.mark.parametrize("completed_revisions", [0, 1])
-def test_revision_endpoint_failure_preserves_the_latest_available_model_draft(completed_revisions):
-    drafts = [_text("Alice", sound=False), _text("Beatrice", sound=False)]
+def test_revision_endpoint_failure_preserves_the_latest_available_model_draft():
+    first = _text("Alice", sound=False)
     failure = BackendError("revision endpoint unavailable")
-    backend = ScriptedBackend(*drafts[:completed_revisions + 1], failure)
+    backend = ScriptedBackend(first, failure)
     doc = _compile(backend)
-    assert doc.prompt == drafts[completed_revisions]
+    assert doc.prompt == first
     assert doc.source == "written"
     assert doc.fallback_reason is None
     assert not doc.fell_back
     assert not doc.ok
     assert "S1-missing-section" in {finding.rule for finding in doc.errors}
     assert any("revision endpoint unavailable" in finding.msg for finding in doc.findings)
-    assert len(backend.messages) == completed_revisions + 2
+    assert len(backend.messages) == 2
 
 
 def test_initial_endpoint_failure_propagates_the_original_exception_without_a_draft():
@@ -102,7 +100,7 @@ def test_warning_only_output_is_delivered_without_revision():
     assert len(backend.messages) == 1
 
 
-@pytest.mark.parametrize("revision_count", [0, 1, 2])
+@pytest.mark.parametrize("revision_count", [0, 1])
 def test_a_passing_model_draft_is_delivered_at_the_first_passing_round(revision_count):
     broken = [_text(version, sound=False) for version in ("Alice", "Beatrice")]
     passed = _text("Cora")
