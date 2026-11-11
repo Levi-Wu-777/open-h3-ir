@@ -96,7 +96,7 @@ def cmd_compile(args) -> int:
     if args.out:
         Path(args.out).write_text(doc.prompt, encoding="utf-8")
         print(f"[written to {args.out}]")
-    return 0 if doc.ok else 1
+    return 0 if doc.ok or doc.source in ("written", "enriched") else 1
 
 
 def cmd_eval(args) -> int:

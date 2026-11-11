@@ -1,16 +1,4 @@
-"""The orchestrator: Brief -> validated IRDocument.
-
-Stage order, and why it is this order:
-
-  B  analyse      per-asset, cached, no dependencies -> can always run first
-  A' mode         needs the cards (the anchor-vs-reference call reads what the images ARE)
-  A" lora         needs the mode (a LoRA is valid for one checkpoint, not both)
-  C1 plan         deterministic skeleton: labels, subjects, speakers, shot spans, budgets
-  D1 beat sheet   one structured call: what happens per shot, camera, the sound partition
-  C2 plan         rebuilt with the beats folded in
-  D2 prose        one call per shot, each with its own span and word budget
-  E  render       deterministic; then validated, then re-rendered and byte-compared
-"""
+"""分析素材、生成模型稿，并在最多两轮诊断修正后交付最新稿。"""
 from __future__ import annotations
 
 import logging
@@ -35,7 +23,7 @@ from . import director as director_mod
 from .licence import resolve_licence
 from .style import resolve_style
 from .prose import beat_sheet, compose_brief, plan_shots, shot_body
-from .render import render_ir
+from .render import RenderResult, render_ir
 from .repair import repair as repair_brief
 from .tokens import count as token_count
 from .validate import Context, validate
@@ -44,7 +32,6 @@ log = logging.getLogger("h3ir.compile")
 
 IR_VERSION = "1"
 
-# Two rounds. A third has never converged in practice and each costs a full generation.
 MAX_FIX_ROUNDS = 2
 
 
@@ -234,6 +221,9 @@ def compile_brief(brief: Brief, *, backend: Backend | None = None,
         # profile reads underneath it as filling what is left.
         director, director_findings = _director(brief)
         lora_findings.extend(director_findings)
+        input_errors = [f for f in active_findings(lora_findings) if f.severity == "ERROR"]
+        if input_errors:
+            raise BriefRefused(input_errors[0].rule, "; ".join(f.msg for f in input_errors))
         if style.note():
             lora_findings.append(Finding("S6-style-discrepancy", "WARN", style.note()))
         if licence.note():
@@ -263,46 +253,33 @@ def compile_brief(brief: Brief, *, backend: Backend | None = None,
                         a.role, decision.rule_fired, list(decision.signals)))
                     a.role = Role.SUBJECT
 
-        # --- the product floor: a complete, valid IR with no prose model involved ---------
         t = time.time()
-        draft_plan = deterministic_draft(brief, mode, cards, opts=opts, loras=loras,
-                                         mode_decision=decision)
-        # Before anything is written or scored: a swap the wiring cannot make unambiguous is a
-        # caller error, and the draft plan is the first object that holds the binding to check.
-        check_swap(brief, draft_plan)
-        _inject_lora_triggers(draft_plan, opts)
+        base_plan = build_plan(brief, mode, cards, opts=opts, loras=loras,
+                               mode_decision=decision, style_phrase=style.phrase)
+        check_swap(brief, base_plan)
+        _inject_lora_triggers(base_plan, opts)
         sheet_flags = tuple(c.is_reference_sheet for c in cards.values())
-        draft_result, draft_findings, draft_tokens = _assess(
-            draft_plan, brief, mode, opts, lora_findings, sheet_flags, licence, style,
-            audio_transcripts=_audio_transcripts(draft_plan, cards))
-        timings["draft_s"] = round(time.time() - t, 2)
-        draft_errors = [f for f in draft_findings if f.severity == "ERROR"]
-        if draft_errors:
-            # The draft is deterministic. If it is invalid that is our bug, not the model's,
-            # and there is nothing to fall back to -- so it raises rather than shipping.
-            raise CompilerInvariantError(
-                "the deterministic draft failed its own validator: "
-                + "; ".join(str(f) for f in draft_errors[:4]))
+        timings["plan_s"] = round(time.time() - t, 2)
 
         # Filled by the planning stage; read by _document, which is defined before it runs.
         shot_plan_record: dict[str, Any] = {}
 
-        def _document(plan, result, findings, n_tokens, source, reason=None) -> IRDocument:
+        def _document(plan, result, findings, n_tokens, source) -> IRDocument:
             return IRDocument(
                 ir_version=IR_VERSION, profile=opts.name, mode=mode,
                 prompt=result.prompt, plan=plan, sections=result.sections,
                 prompt_tokens=n_tokens, findings=active_findings(findings),
-                source=source, fallback_reason=reason,
+                source=source,
                 provenance={
                     "analyzer_model": backend.cfg.model,
                     "prose_model": backend.cfg.model if source == "enriched" else None,
                     "source": source,
-                    "fallback_reason": reason,
+                    "fallback_reason": None,
                     "seed": seed,
                     # What the dial decided, in the record. Proportionality is now part of the bar
                     # the output is judged against, so the setting and its consequences have to be
                     # auditable next to the artifact rather than inferred from it.
-                    "creativity": _scope(brief, draft_plan).note(),
+                    "creativity": _scope(brief, plan).note(),
                     # Beside the dial, and for the same reason: the setting and what it was allowed
                     # to reach have to be auditable next to the artifact rather than inferred from it.
                     "director": director_mod.note(director),
@@ -310,8 +287,8 @@ def compile_brief(brief: Brief, *, backend: Backend | None = None,
                     "request": brief.intent,
                     "prompt_language": brief.prompt_language,
                     "beatsheet_prompt": beatsheet_prompt,
-                "shotplan_prompt": shotplan_prompt,
-                "shot_plan": dict(shot_plan_record) or None,
+                    "shotplan_prompt": shotplan_prompt,
+                    "shot_plan": dict(shot_plan_record) or None,
                     "prose_prompt": prose_prompt,
                     "thinking_prose": thinking_prose,
                     "thinking_planning": thinking_planning,
@@ -319,70 +296,94 @@ def compile_brief(brief: Brief, *, backend: Backend | None = None,
                     "server_version": backend.server_version(),
                     "card_hashes": {k: v.hash() for k, v in cards.items()},
                     "plan_hash": plan.hash(),
-                    "draft_tokens": draft_tokens,
                     "timings": timings,
                     "clarification": needs_clarification(decision),
                 })
 
         if not llm:
+            draft_plan = deterministic_draft(brief, mode, cards, opts=opts, loras=loras,
+                                             mode_decision=decision)
+            _inject_lora_triggers(draft_plan, opts)
+            draft_result, draft_findings, draft_tokens = _assess(
+                draft_plan, brief, mode, opts, lora_findings, sheet_flags, licence, style,
+                audio_transcripts=_audio_transcripts(draft_plan, cards))
             return _document(draft_plan, draft_result, draft_findings, draft_tokens,
-                             "draft", "the caller asked for the draft only")
+                             "draft")
 
-        # --- write first, verify second --------------------------------------------------
-        # The inversion. Two composed architectures produced structurally identical output while
-        # an unharnessed write beat both, so the machinery moves from BUILDING the text to
-        # CHECKING it. Every guarantee survives; none of them pre-writes a sentence any more.
         if write_first:
+            fixed = None
+            found = []
+            n_tokens = 0
+            rounds = 0
+            mechanical_repairs: list[str] = []
+            stuck: list[str] = []
+
+            def finish_written() -> IRDocument:
+                assert fixed is not None
+                findings = (list(lora_findings) + wiring_findings(base_plan, brief)
+                            + list(fixed.findings) + found)
+                findings.extend(Finding("X12-brief-repaired", "INFO", note)
+                                for note in mechanical_repairs)
+                findings.extend(Finding("X14-finding-unfixable", "WARN",
+                                        f"{rule} survived a correction pass unchanged")
+                                for rule in dict.fromkeys(stuck))
+                result = RenderResult(fixed.text, _split_written(fixed.text), [])
+                doc = _document(base_plan, result, findings, n_tokens, "written")
+                doc.provenance["repairs"] = mechanical_repairs
+                doc.provenance["fix_rounds"] = rounds
+                doc.provenance["unfixable"] = list(dict.fromkeys(stuck))
+                doc.provenance["compose_prompt"] = chosen_compose
+                return doc
+
             try:
                 t = time.time()
-                labels = tuple(m.label for m in draft_plan.manifest)
+                labels = tuple(m.label for m in base_plan.manifest)
                 imgs = [a.path for a in brief.assets
                         if a.kind.value == "image" and a.path] or None
-                scope = _scope(brief, draft_plan)
+                scope = _scope(brief, base_plan)
                 chosen_compose = compose_prompt or (
                     "compose.v2.txt" if mode is Mode.REF2VA else "compose_base.v1.txt")
                 # The wiring's own facts travel with the ask: which mode's document shape this is,
                 # what the pictures are, and what the audio roles settle. Each of those was a
                 # question the model had to guess at, and each guess had a rule waiting for it.
-                pic_roles = tuple((m.label, m.role.value) for m in draft_plan.manifest
+                pic_roles = tuple((m.label, m.role.value) for m in base_plan.manifest
                                   if m.kind.value == "image")
-                transcribed = _audio_transcripts(draft_plan, cards)
-                vid_roles = tuple((m.label, m.role.value) for m in draft_plan.manifest
+                transcribed = _audio_transcripts(base_plan, cards)
+                vid_roles = tuple((m.label, m.role.value) for m in base_plan.manifest
                                   if m.kind is AssetKind.VIDEO)
-                aud_roles = tuple((m.label, m.role.value) for m in draft_plan.manifest
+                aud_roles = tuple((m.label, m.role.value) for m in base_plan.manifest
                                   if m.kind is AssetKind.AUDIO)
-                worlds = _edit_source_worlds(draft_plan, cards)
-                taken = _taken_over(draft_plan)
-                written = compose_brief(backend, brief, draft_plan.subjects, cards,
-                                       draft_plan.target, labels,
+                worlds = _edit_source_worlds(base_plan, cards)
+                taken = _taken_over(base_plan)
+                written = compose_brief(backend, brief, base_plan.subjects, cards,
+                                       base_plan.target, labels,
                                        prompt_name=chosen_compose, seed=seed,
                                        thinking=thinking_planning, images=imgs,
                                        style=style, licence=licence, scope=scope,
                                        director=director,
-                                       mode=mode, task_types=tuple(draft_plan.task_types),
+                                       mode=mode, task_types=tuple(base_plan.task_types),
                                        picture_roles=pic_roles, video_roles=vid_roles,
                                        audio_roles=aud_roles,
                                        audio_transcripts=transcribed,
                                        video_worlds=worlds, taken_over=taken,
                                        generation_task=("video editing"
-                                                        not in draft_plan.task_types),
-                                       omit=omit, manifest=draft_plan.manifest)
+                                                        not in base_plan.task_types),
+                                       omit=omit, manifest=base_plan.manifest)
                 timings["compose_s"] = round(time.time() - t, 2)
 
-                from .prose import _definition_lines
                 from .prose import _definition_lines, fix_with_findings
 
                 def _verify(candidate: str):
-                    fx = repair_brief(candidate, target=draft_plan.target, mode=mode,
+                    fx = repair_brief(candidate, target=base_plan.target, mode=mode,
                                       labels=labels,
                                       dialogue=tuple(d.text for d in brief.dialogue),
                                       style_phrase=style.phrase,
                                       definitions=tuple(_definition_lines(
-                                          draft_plan.subjects, cards, labels)),
-                                      task_types=tuple(draft_plan.task_types))
+                                          base_plan.subjects, cards, labels)),
+                                      task_types=tuple(base_plan.task_types))
                     n = token_count(fx.text)
                     found = validate(fx.text, _written_context(
-                        brief, mode, draft_plan, cards, n, style, licence))
+                        brief, mode, base_plan, cards, n, style, licence))
                     return fx, found, n
 
                 fixed, found, n_tokens = _verify(written)
@@ -406,7 +407,7 @@ def compile_brief(brief: Brief, *, backend: Backend | None = None,
                     t2 = time.time()
                     # Both namespaces: the media labels come from the wiring and the subject
                     # labels from the plan, and L2 is about the second kind.
-                    inventory = labels + tuple(x.label for x in draft_plan.subjects)
+                    inventory = labels + tuple(x.label for x in base_plan.subjects)
                     # The section list too: the fix ask used to say "the corrected six
                     # sections" unconditionally, which pushed a three-section base brief toward the
                     # full-reference format during the pass meant to correct it.
@@ -429,150 +430,92 @@ def compile_brief(brief: Brief, *, backend: Backend | None = None,
                     if not errors:
                         break
 
-                for r in mechanical_repairs:
-                    lora_findings.append(Finding("X12-brief-repaired", "INFO", r))
-                for rule in dict.fromkeys(stuck):
-                    lora_findings.append(Finding(
-                        "X14-finding-unfixable", "WARN",
-                        f"{rule} survived a correction pass unchanged — the message may be "
-                        "unclear or the rule may be wrong"))
-
-                # wiring_findings explicitly, because this path never calls `_assess`: without it a
-                # written brief shipped with no word about an uncharacterised audio reference, a
-                # truncated source clip or a duration that moved.
-                findings = (list(lora_findings) + wiring_findings(draft_plan, brief)
-                            + list(fixed.findings) + found)
                 if errors:
-                    reason = (f"the written brief still failed after {rounds} correction pass(es): "
-                              + "; ".join(f.rule for f in errors[:4]))
-                    log.warning("falling back to the draft — %s", reason)
-                    doc = _document(draft_plan, draft_result, draft_findings, draft_tokens,
-                                    "draft", reason)
-                    doc.findings = active_findings(list(draft_findings) + [
-                        Finding("X13-written-rejected", "WARN", reason)])
-                    doc.provenance["rejected_written"] = fixed.text
-                    doc.provenance["rejected_rules"] = [f"{f.rule}: {f.msg}" for f in errors]
-                    doc.provenance["fix_rounds"] = rounds
-                    doc.provenance["repairs"] = mechanical_repairs
-                    return doc
-
-                doc = _document(draft_plan, draft_result, draft_findings, draft_tokens,
-                                "written")
-                doc.source = "written"
-                doc.prompt = fixed.text
-                doc.sections = _split_written(fixed.text)
-                doc.prompt_tokens = n_tokens
-                doc.findings = active_findings(findings)
-                doc.provenance["repairs"] = mechanical_repairs
-                doc.provenance["fix_rounds"] = rounds
-                doc.provenance["unfixable"] = list(dict.fromkeys(stuck))
-                doc.provenance["compose_prompt"] = chosen_compose
-                doc.provenance["timings"] = timings
-                return doc
+                    log.warning("returning the latest model prompt after %d correction passes: %s",
+                                rounds, "; ".join(f.rule for f in errors))
+                return finish_written()
             except BackendError as e:
-                reason = f"the composing model failed: {type(e).__name__}: {e}"
-                log.warning("falling back to the draft — %s", reason)
-                doc = _document(draft_plan, draft_result, draft_findings, draft_tokens,
-                                "draft", reason)
-                doc.findings = active_findings(list(draft_findings) + [
-                    Finding("X9-model-unavailable-midway", "WARN", reason)])
+                if fixed is None:
+                    raise
+                message = f"the correction model failed; retaining its latest prompt: {type(e).__name__}: {e}"
+                log.warning(message)
+                doc = finish_written()
+                doc.findings.append(Finding("X9-model-unavailable-midway", "WARN", message))
                 return doc
 
         # --- the additive pass: prose enrichment over a bounded surface ------------------
-        try:
-            skeleton = build_plan(brief, mode, cards, opts=opts, loras=loras,
-                                  mode_decision=decision)
+        skeleton = build_plan(brief, mode, cards, opts=opts, loras=loras,
+                              mode_decision=decision)
 
-            # The model decides the edit. Code then proves it legal; a proposal that cannot be
-            # repaired unambiguously falls back to the draft rather than being forced into shape.
-            t = time.time()
-            scope = _scope(brief, skeleton)
-            proposal = plan_shots(backend, brief, skeleton.subjects, cards, skeleton.target,
-                                  prompt_name=shotplan_prompt, seed=seed,
-                                  thinking=thinking_planning, max_shots=opts.max_shots,
-                                  licence=licence, scope=scope,
+        t = time.time()
+        scope = _scope(brief, skeleton)
+        proposal = plan_shots(backend, brief, skeleton.subjects, cards, skeleton.target,
+                              prompt_name=shotplan_prompt, seed=seed,
+                              thinking=thinking_planning, max_shots=opts.max_shots,
+                              licence=licence, scope=scope,
+                              director=director)
+        for sug in proposal.suggestions:
+            lora_findings.append(Finding("S8-planner-suggestion", "INFO", sug))
+        timings["shotplan_s"] = round(time.time() - t, 2)
+        for r in proposal.repairs:
+            lora_findings.append(Finding("X11-shot-plan-repaired", "WARN", r))
+        if not proposal.ok:
+            raise BackendError("the shot plan was rejected: "
+                               + "; ".join(proposal.rejections))
+        shot_plan_record.update({
+            "shots": len(proposal.shots),
+            "reasoning": proposal.reasoning,
+            "purposes": [f"{sh.purpose}/{sh.framing}" for sh in proposal.shots],
+            "cuts_s": [round(sh.start_ms / 1000, 3) for sh in proposal.shots[1:]],
+            "repairs": list(proposal.repairs),
+            "suggestions": list(proposal.suggestions),
+        })
+        log.info("shot plan: %d shot(s) — %s", len(proposal.shots), proposal.reasoning[:120])
+
+        t = time.time()
+        sheet = beat_sheet(backend, brief, mode, skeleton.subjects, cards,
+                           allocate_from_proposal(skeleton.target, proposal.shots, mode, opts),
+                           prompt_name=beatsheet_prompt, seed=seed,
+                           thinking=False, style=style,
+                           director=director)
+        timings["beats_s"] = round(time.time() - t, 2)
+
+        sound_events: list[dict[str, Any]] = []
+        for i, sh in enumerate(sheet["shots"], 1):
+            for txt in sh.get("sync_sound", []):
+                sound_events.append({"text": txt, "layer": "sync", "shot": i})
+        for txt in sheet.get("ambient_sound", []):
+            sound_events.append({"text": txt, "layer": "ambient"})
+
+        plan = build_plan(brief, mode, cards, proposal=proposal.shots,
+                          sound_events=sound_events,
+                          style_phrase=sheet["style_phrase"], music=sheet["music"],
+                          opts=opts, loras=loras, mode_decision=decision)
+        plan.summary = sheet["summary"]
+        _inject_lora_triggers(plan, opts)
+
+        t = time.time()
+        anchor_images = [m for m in plan.manifest if m.kind.value == "image"]
+        anchor_label = (anchor_images[0].label
+                        if anchor_images and mode is not Mode.REF2VA else None)
+        for shot in plan.shots:
+            imgs = None
+            if shot.n == 1 and anchor_images:
+                paths = [a.path for a in brief.assets
+                         if a.sha256 in {m.sha256 for m in anchor_images} and a.path]
+                imgs = paths or None
+            shot.body = shot_body(backend, brief, mode, shot, plan.subjects,
+                                  plan.style_phrase, prompt_name=prose_prompt,
+                                  thinking=thinking_prose, seed=seed, images=imgs,
+                                  anchor_label=anchor_label if shot.n == 1 else None,
                                   director=director)
-            for sug in proposal.suggestions:
-                lora_findings.append(Finding("S8-planner-suggestion", "INFO", sug))
-            timings["shotplan_s"] = round(time.time() - t, 2)
-            for r in proposal.repairs:
-                lora_findings.append(Finding("X11-shot-plan-repaired", "WARN", r))
-            if not proposal.ok:
-                raise BackendError("the shot plan was rejected: "
-                                   + "; ".join(proposal.rejections))
-            shot_plan_record.update({
-                "shots": len(proposal.shots),
-                "reasoning": proposal.reasoning,
-                "purposes": [f"{sh.purpose}/{sh.framing}" for sh in proposal.shots],
-                "cuts_s": [round(sh.start_ms / 1000, 3) for sh in proposal.shots[1:]],
-                "repairs": list(proposal.repairs),
-                "suggestions": list(proposal.suggestions),
-            })
-            log.info("shot plan: %d shot(s) — %s", len(proposal.shots), proposal.reasoning[:120])
+        timings["prose_s"] = round(time.time() - t, 2)
 
-            t = time.time()
-            sheet = beat_sheet(backend, brief, mode, skeleton.subjects, cards,
-                               allocate_from_proposal(skeleton.target, proposal.shots, mode, opts),
-                               prompt_name=beatsheet_prompt, seed=seed,
-                               thinking=False, style=style,
-                               director=director)
-            timings["beats_s"] = round(time.time() - t, 2)
-
-            sound_events: list[dict[str, Any]] = []
-            for i, sh in enumerate(sheet["shots"], 1):
-                for txt in sh.get("sync_sound", []):
-                    sound_events.append({"text": txt, "layer": "sync", "shot": i})
-            for txt in sheet.get("ambient_sound", []):
-                sound_events.append({"text": txt, "layer": "ambient"})
-
-            plan = build_plan(brief, mode, cards, proposal=proposal.shots,
-                              sound_events=sound_events,
-                              style_phrase=sheet["style_phrase"], music=sheet["music"],
-                              opts=opts, loras=loras, mode_decision=decision)
-            plan.summary = sheet["summary"]
-            _inject_lora_triggers(plan, opts)
-
-            t = time.time()
-            anchor_images = [m for m in plan.manifest if m.kind.value == "image"]
-            anchor_label = (anchor_images[0].label
-                            if anchor_images and mode is not Mode.REF2VA else None)
-            for shot in plan.shots:
-                imgs = None
-                if shot.n == 1 and anchor_images:
-                    paths = [a.path for a in brief.assets
-                             if a.sha256 in {m.sha256 for m in anchor_images} and a.path]
-                    imgs = paths or None
-                shot.body = shot_body(backend, brief, mode, shot, plan.subjects,
-                                      plan.style_phrase, prompt_name=prose_prompt,
-                                      thinking=thinking_prose, seed=seed, images=imgs,
-                                      anchor_label=anchor_label if shot.n == 1 else None,
-                                      director=director)
-            timings["prose_s"] = round(time.time() - t, 2)
-
-            _reconcile_scopes(plan)
-            result, findings, n_tokens = _assess(plan, brief, mode, opts, lora_findings,
-                                                 sheet_flags, licence, style,
-                                                 audio_transcripts=_audio_transcripts(plan, cards))
-            errors = [f for f in findings if f.severity == "ERROR"]
-            if errors:
-                reason = ("the enriched brief failed validation: "
-                          + "; ".join(f"{f.rule}" for f in errors[:4]))
-                log.warning("falling back to the deterministic draft — %s", reason)
-                doc = _document(draft_plan, draft_result, draft_findings, draft_tokens,
-                                "draft", reason)
-                doc.findings = active_findings(list(draft_findings) + [
-                    Finding("X8-enriched-rejected", "WARN", reason)])
-                return doc
-            return _document(plan, result, findings, n_tokens, "enriched")
-
-        except BackendError as e:
-            reason = f"the prose model failed: {type(e).__name__}: {e}"
-            log.warning("falling back to the deterministic draft — %s", reason)
-            doc = _document(draft_plan, draft_result, draft_findings, draft_tokens,
-                            "draft", reason)
-            doc.findings = active_findings(list(draft_findings) + [
-                Finding("X9-model-unavailable-midway", "WARN", reason)])
-            return doc
+        _reconcile_scopes(plan)
+        result, findings, n_tokens = _assess(plan, brief, mode, opts, lora_findings,
+                                             sheet_flags, licence, style,
+                                             audio_transcripts=_audio_transcripts(plan, cards))
+        return _document(plan, result, findings, n_tokens, "enriched")
 
     finally:
         if own_backend:

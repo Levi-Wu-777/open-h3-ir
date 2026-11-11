@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from urllib.parse import urlsplit
 
+import asyncio
 import base64
 import json
 import logging
@@ -36,15 +37,17 @@ import os
 import re
 import struct
 import tempfile
+import threading
 import time
 import zlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import httpx
 
-from .config import DEEPSEEK_BASE_URL, get_config
+from .config import (DEEPSEEK_BASE_URL, DEEPSEEK_MAX_ATTEMPTS,
+                     DEEPSEEK_RETRY_DELAY_SECONDS, DEEPSEEK_TIMEOUT_SECONDS, get_config)
 
 log = logging.getLogger("h3ir.backend")
 
@@ -122,6 +125,7 @@ class Reply:
     finish_reason: str
     wall_s: float
     model: str
+    usage: dict[str, Any] = field(default_factory=dict)
 
     @property
     def reasoning_share(self) -> float:
@@ -179,6 +183,7 @@ class Backend:
         self.cfg = (cfg or get_config()).llm
         self._client = client
         self._owns_client = client is None
+        self._client_lock = threading.Lock()
         self._resolved_model: str | None = None
 
     def model_id(self) -> str:
@@ -248,11 +253,17 @@ class Backend:
 
     def _get(self, url: str, timeout: float) -> httpx.Response:
         """Every GET this file makes, so a configured credential is on all of them."""
-        return self._http().get(url, timeout=timeout, headers=self._headers())
+        response = self._http().get(url, timeout=timeout, headers=self._headers())
+        if (urlsplit(self.base_url()).hostname == urlsplit(DEEPSEEK_BASE_URL).hostname
+                and response.status_code in (401, 403)):
+            raise EndpointRefused(response.status_code, response.text)
+        return response
 
     def _http(self) -> httpx.Client:
         if self._client is None:
-            self._client = httpx.Client(timeout=self.cfg.timeout_s)
+            with self._client_lock:
+                if self._client is None:
+                    self._client = httpx.Client(timeout=self.cfg.timeout_s)
         return self._client
 
     def close(self) -> None:
@@ -374,12 +385,14 @@ class Backend:
     def chat(self, messages: list[dict[str, Any]], *, thinking: bool | None = None,
              max_tokens: int | None = None, temperature: float = 0.7,
              seed: int | None = None, response_format: dict[str, Any] | None = None,
-             stop: list[str] | None = None, retries: int = 2) -> Reply:
+             stop: list[str] | None = None, retries: int | None = None) -> Reply:
         if thinking is None:
             thinking = self.cfg.default_thinking
         # F16: a schema is only honoured with thinking off. Refuse the unsafe combination
         # rather than returning prose that looks like a schema failure nobody notices.
         is_deepseek = urlsplit(self.base_url()).hostname == urlsplit(DEEPSEEK_BASE_URL).hostname
+        if retries is None:
+            retries = 2 if is_deepseek else 1
         if response_format is not None and thinking and not is_deepseek:
             raise BackendError(
                 "structured output requires thinking=False on this endpoint "
@@ -402,39 +415,62 @@ class Backend:
         elif not thinking:
             body["chat_template_kwargs"] = {"enable_thinking": False}
 
+        attempts = min(retries + 1, DEEPSEEK_MAX_ATTEMPTS) if is_deepseek else retries + 1
         last: Exception | None = None
-        for attempt in range(retries + 1):
+        for attempt in range(attempts):
             try:
                 return self._once(body)
-            except (TruncatedResponse, httpx.HTTPError) as e:
-                last = e
-                if attempt < retries:
-                    # Growing the budget is right when reasoning ate it, and wrong when the
-                    # model is looping -- there, each retry multiplies the wasted time. So the
-                    # ladder is capped rather than open-ended.
-                    if isinstance(e, TruncatedResponse):
-                        grown = int(body["max_tokens"] * 1.75)
-                        ceiling = max(self.cfg.max_tokens, 2 * MAX_GROWTH_BASE)
-                        if grown > ceiling:
-                            log.warning("truncated at %s tokens and the ceiling is %s; not "
-                                        "growing further", body["max_tokens"], ceiling)
-                            break
-                        body["max_tokens"] = grown
-                        log.warning("truncated; retrying with max_tokens=%s", body["max_tokens"])
-                    else:
-                        time.sleep(1.5 * (attempt + 1))
-                    continue
-                break
-        # Re-raise the original so callers can still see WHY it failed. TruncatedResponse is a
-        # BackendError, so `except BackendError` in the compiler still catches it and falls back.
+            except (TruncatedResponse, httpx.HTTPError, EndpointRefused, ValueError) as error:
+                if isinstance(error, EndpointRefused):
+                    if not is_deepseek or (error.status != 429 and error.status < 500):
+                        raise
+                if not is_deepseek and isinstance(error, ValueError):
+                    raise
+                last = error
+                if attempt + 1 == attempts:
+                    break
+                if is_deepseek:
+                    log.warning("DeepSeek attempt %d/%d failed: %s", attempt + 1, attempts, error)
+                    time.sleep(DEEPSEEK_RETRY_DELAY_SECONDS)
+                elif isinstance(error, TruncatedResponse):
+                    grown = int(body["max_tokens"] * 1.75)
+                    ceiling = max(self.cfg.max_tokens, 2 * MAX_GROWTH_BASE)
+                    if grown > ceiling:
+                        log.warning("truncated at %s tokens and the ceiling is %s; not "
+                                    "growing further", body["max_tokens"], ceiling)
+                        break
+                    body["max_tokens"] = grown
+                    log.warning("truncated; retrying with max_tokens=%s", body["max_tokens"])
+                else:
+                    time.sleep(1.5 * (attempt + 1))
         if isinstance(last, BackendError):
             raise last
-        raise BackendError(f"chat failed after {retries + 1} attempt(s): {last}") from last
+        raise BackendError(f"chat failed after {attempts} attempt(s): {last}") from last
+
+    async def _post_deepseek(self, body: dict[str, Any]) -> httpx.Response:
+        url = f"{self.base_url()}/chat/completions"
+        transport = None
+        if not self._owns_client:
+            transport = self._http()._transport_for_url(httpx.URL(url))
+            if not isinstance(transport, httpx.AsyncBaseTransport):
+                raise BackendError("DeepSeek's total request deadline requires an async-capable "
+                                   "injected transport, such as httpx.MockTransport")
+        async def post() -> httpx.Response:
+            async with httpx.AsyncClient(transport=transport, timeout=DEEPSEEK_TIMEOUT_SECONDS) as client:
+                return await client.post(url, json=body, headers=self._headers())
+        try:
+            return await asyncio.wait_for(post(), timeout=DEEPSEEK_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError as error:
+            raise httpx.TimeoutException(
+                f"DeepSeek request exceeded {DEEPSEEK_TIMEOUT_SECONDS:g}s total deadline") from error
 
     def _once(self, body: dict[str, Any]) -> Reply:
         t0 = time.time()
-        r = self._http().post(f"{self.base_url()}/chat/completions", json=body,
-                              headers=self._headers())
+        if urlsplit(self.base_url()).hostname == urlsplit(DEEPSEEK_BASE_URL).hostname:
+            r = asyncio.run(self._post_deepseek(body))
+        else:
+            r = self._http().post(f"{self.base_url()}/chat/completions", json=body,
+                                  headers=self._headers())
         wall = time.time() - t0
         if r.status_code >= 400:
             raise EndpointRefused(r.status_code, r.text)
@@ -478,7 +514,7 @@ class Backend:
         return Reply(content=str(content).strip(), reasoning=reasoning,
                      prompt_tokens=usage.get("prompt_tokens", 0),
                      completion_tokens=usage.get("completion_tokens", 0),
-                     finish_reason=finish, wall_s=wall, model=data.get("model", ""))
+                     finish_reason=finish, wall_s=wall, model=data.get("model", ""), usage=dict(usage))
 
     # ------------------------------------------------------------------ structured
 
@@ -511,8 +547,12 @@ class Backend:
         else:
             msgs[-1] = dict(msgs[-1])
             msgs[-1]["content"] = _append_text(msgs[-1]["content"], _schema_ask(schema))
+        is_deepseek = urlsplit(self.base_url()).hostname == urlsplit(DEEPSEEK_BASE_URL).hostname
+        attempts = min(retries + 1, DEEPSEEK_MAX_ATTEMPTS) if is_deepseek else retries + 1
         last: Exception | None = None
-        for attempt in range(retries + 1):
+        for attempt in range(attempts):
+            if is_deepseek and attempt:
+                time.sleep(DEEPSEEK_RETRY_DELAY_SECONDS)
             # A retry has to ask a DIFFERENT question, and at temperature 0 with a fixed seed it
             # cannot: the decode is deterministic, so re-sending identical messages returns the
             # identical reply. Measured, not theorised -- three attempts produced three
@@ -525,9 +565,18 @@ class Backend:
             # this tie, rather than creeping up from 0.4 and wasting an attempt at a
             # temperature that was never shown to work. Later attempts climb from there.
             temp = temperature if attempt == 0 else max(0.7, temperature + 0.3) + 0.3 * (attempt - 1)
-            reply = self.chat(msgs, thinking=thinking, response_format=rf,
-                              max_tokens=max_tokens, temperature=temp, seed=seed,
-                              retries=1)
+            try:
+                reply = self.chat(msgs, thinking=thinking, response_format=rf,
+                                  max_tokens=max_tokens, temperature=temp, seed=seed,
+                                  retries=0 if is_deepseek else 1)
+            except BackendError as error:
+                if not is_deepseek:
+                    raise
+                if isinstance(error, EndpointRefused) and error.status != 429 and error.status < 500:
+                    raise
+                last = error
+                log.warning("DeepSeek structured attempt %d/%d failed: %s", attempt + 1, attempts, error)
+                continue
             try:
                 obj = json.loads(_extract_json(reply.content))
             except json.JSONDecodeError as e:
@@ -551,7 +600,7 @@ class Backend:
                 log.warning("%s", last)
                 continue
             return obj
-        raise BackendError(f"structured call failed after {retries + 1} attempt(s): {last}")
+        raise BackendError(f"structured call failed after {attempts} attempt(s): {last}") from last
 
 
 def _is_the_schema_itself(obj: dict[str, Any]) -> bool:

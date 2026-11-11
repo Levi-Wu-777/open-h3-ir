@@ -12,8 +12,7 @@ person to read.
 
 ## In one line
 
-You send a plain-language request and some files. You get back a validated H3 brief **and the asset
-wiring that brief is true for**. Nothing else in your system has to understand H3's format.
+提交自然语言请求与素材，获得模型提示词、素材接线和校验诊断。诊断用于反馈，不能把已返回稿件等同于格式、语义或视频效果全部合格。
 
 ## Routes
 
@@ -22,7 +21,7 @@ wiring that brief is true for**. Nothing else in your system has to understand H
 | `GET` | `/health` | liveness |
 | `GET` | `/v1/capabilities` | legal durations, aspects, asset limits, dialogue languages, output geometry |
 | `GET` | `/v1/contract` | every field name, role, refusal and limit that crosses to a client, and a digest per part |
-| `POST` | `/v1/briefs` | compile. `201` with the brief, `422` if the request cannot be honoured as stated |
+| `POST` | `/v1/briefs` | 生成稿件，正常返回 `201`；含 ERROR 仍返回稿件并标记 `needs_review`；真实输入错误才按 `422` 等错误状态返回 |
 | `GET` | `/v1/briefs/{id}` | fetch a compiled brief again |
 | `PATCH` | `/v1/briefs/{id}` | refine in plain language: `{"change":"make it darker"}` → `200`, new version |
 | `GET` | `/v1/briefs/{id}/prompt` | the prompt text alone |
@@ -76,25 +75,7 @@ choosing it cannot lose a capability the request needed.
 
 ## The creativity dial
 
-One control, four named positions, default `balanced`. **A person understands these words; a 0.0 to
-1.0 slider does not, which is why it is named rather than numeric.**
-
-| position | what it licenses beyond the request |
-|---|---|
-| `restrained` | nothing |
-| **`balanced`** (default) | a score for the audience |
-| `bold` | a score, a spoken line, text visible in the frame |
-| `extreme` | the same three, plus every decision played at the far end of what the format supports |
-
-Three things a surface must not get wrong about it:
-
-- **It is content licence, not effort.** A higher setting does not mean more shots or more camera
-  moves. It means the writer *may* introduce things the request never mentioned.
-- **An explicit prohibition in the request beats every setting.** "No dialogue" at `extreme` still
-  means no dialogue.
-- **The middle two positions are deliberately soft.** `bold` is a nudge. If it does not visibly
-  change an output, that is the design. Do not build a UI that promises a visible difference at
-  every step.
+`creativity` 默认为 `balanced`，作为用户偏好原样传给模型，不形成新增台词、配乐、画面文字或运镜的许可矩阵与门禁；用户原始要求和约束一并传递。
 
 ## Who is directing
 
@@ -120,20 +101,13 @@ Four things a surface must not get wrong about it:
   request or to a reference first, states that resolution in the ask, and places the profile
   underneath it. Write "a locked-off wide" and you get a locked-off wide whoever is directing, while
   the light and the sound are still theirs.
-- **It never sets how many shots there are or where they cut.** Pin `shots` and the count is your
-  contract, enforced. Leave it unset and the writer decides the edit, exactly as it does with no
-  profile at all. A UI that presents direction as an editing control is promising something this
-  layer deliberately cannot do.
+- **镜头数遵循用户的显式要求。** 设置 `shots` 后，模型按该数量写作；未满足时反馈诊断并保留模型稿。未设置时由模型决定镜头安排，导演资料不形成额外数量上限。
 - **An unknown `director` id does not fail the render.** It falls back to no direction and says so as
   a `WARN` finding, `N2-director-unknown`, naming the word that missed. A saved script pinned to an
   id that has since been removed is told rather than quietly compiled with no direction at all. A
   profile with a name and an empty `notes` is inert rather than invalid, and says so as
   `N1-director-empty`.
-- **The one refusal is length.** A `notes` over 5,000 characters is a `422` with
-  `code: director-profile-invalid`, because all of it rides in the ask on every call and a pasted
-  document crowds out the request itself. Read the number rather than copying it:
-  `GET /v1/contract` publishes it as `limits.director_notes_max_chars`, so a client can say it while
-  somebody is still typing instead of after a round trip.
+- **导演资料作为请求指导原样传给模型。** 不作为内容门禁，也不按字符数拒绝或截断。
 
 `GET /v1/directors` returns the seven in full, the twenty camera-move names H3 recognises, and one
 sentence saying what a profile governs, so a surface can show somebody a real paragraph to start from
@@ -168,20 +142,15 @@ Three things about it are worth building on:
 `h3ir contract` prints the same document, and `h3ir contract --js` prints the browser module the
 ComfyUI pack ships so its director picker works with nothing running.
 
-## What it guarantees, and is safe to build on
+## 模型稿交付与诊断
 
-- **The manifest is the contract.** Every label in the brief has an asset behind it, and every asset
-  has a label in the brief. An empty manifest means attach nothing.
-- **The caller's words are never rewritten.** Dialogue is byte-exact and does not pass through a
-  model.
-- **Duration lands on H3's frame grid**, and every cut time falls inside the clip.
-- **Every section H3 expects is present, in order, and non-empty.**
-- **An explicit prohibition is never violated.**
-- **You get a valid brief or an error, never a quietly degraded one.** If the writing model is
-  unavailable or its output fails verification, the deterministic draft ships and the response says
-  so in a field you can read (`source`, `fallback_reason`).
-- **Nothing describes audio it has not heard.** No component here can hear. A transcript you supply
-  provides the words; you supply the rest.
+默认路径不预存模板稿。取得完整模型稿后，校验仅提供诊断，并最多反馈修正两轮；仍含 ERROR 时保留最新完整模型稿，以正常响应交付，状态为 `needs_review`。后续修正调用失败时也保留已有模型稿，不用模板替换。
+
+若初稿阶段尚未得到任何完整模型输出，接口返回真实模型错误；无效输入、缺文件、接线容量和协议错误仍按真实原因报错。POST 正常返回 `201`，PATCH 正常返回 `200`；不能仅因正文诊断而拒绝交付。
+
+`ir.diagnostics` 保留每条诊断的规则、级别与说明。`ERROR` 表示需要检查的格式或内容问题，不能用来断言请求未完成；`WARN` 和 `INFO` 也仅供反馈。客户端应允许查看和使用 `needs_review` 稿件，不在后续节点重新按诊断数量拦截。
+
+独立素材最多四路并发分析，结果按输入顺序归集；写作与反馈修正保持依赖顺序。DeepSeek 每次调用最多尝试三次，失败重试前固定等待一秒，单次尝试从发起到完整响应的总 deadline 为十秒，不叠加嵌套重试。
 
 ## What it only attempts, so do not build a promise on these
 
@@ -204,7 +173,7 @@ Three layers. A UI should read the first two and never the third.
 - **`presentation`**: plain language, the request as asked, the setting used, the style, the shots
   with what happens in each, who speaks, the sound. No labels, no markers, no field names, and no
   mode names ever.
-- **`findings`**: each severity-tagged. `ERROR` blocks; `WARN` and `INFO` are for display.
+- **诊断**：`ir.diagnostics` 包含 ERROR、WARN、INFO；均不阻止已有模型稿交付，有 ERROR 时状态为 `needs_review`。
 - **`ir`**: the brief itself plus the manifest, for whoever wires the render graph.
 
 ## Limits worth designing around

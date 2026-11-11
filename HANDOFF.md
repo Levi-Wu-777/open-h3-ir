@@ -56,8 +56,7 @@ the install is sound, because nothing in them can be broken by a misconfigured e
 .venv/bin/h3ir budget --seconds 10   # -> "243 frames = 10.125s", exit 0
 ```
 
-If `h3ir controls` reports any failing control, stop. The validator is the product, and a failing
-control means this checkout is not sound. Do not work around it.
+静态 `h3ir controls` 失败表示检测器或交付行为存在回归，应先修复；它不授权丢弃模型稿。默认路径不预存模板稿，模型稿校验仅用于诊断和最多两轮反馈修正。
 
 At this point the project is installed and correct. Everything after this is about reaching a model.
 
@@ -106,13 +105,9 @@ as written:
   --seconds 10 --image h3ir/golden/assets/ref1.png
 ```
 
-It worked if the report line says **`0 error(s)`** and a brief follows with `subject_definitions`,
-`summary`, `retention_analysis`, `detailed_description`, `overall_soundscape` and
-`non_diegetic_music`. Expect `mode=ref2va`, chosen because an image was attached.
+拿到完整模型稿表示写作调用完成。诊断为零表示本次格式检查通过；仍含 ERROR 的模型稿也正常交付，API 状态为 `needs_review`，供调用者继续检查。最多反馈修正两轮，随后保留最新完整模型稿；后续修正调用失败也保留已有稿件，不换成模板。若初稿阶段没有得到任何完整模型输出，则返回真实接口错误。
 
-**Warnings are not failures.** `-> PASS (with warnings)` is a pass. The compiler reports things worth
-knowing (a brief shorter than the spec's guidance, a shot that names a subject without restating the
-wardrobe) instead of hiding them. Only `error(s)` above zero is a failure.
+独立素材最多四路并发分析；写作与修正不并发执行。DeepSeek 每次调用最多尝试三次，失败重试前固定等待一秒，单次尝试从发起到完整响应的总 deadline 为十秒。
 
 The HTTP service, if the caller is an application rather than a shell:
 
@@ -123,14 +118,14 @@ curl -s localhost:8420/v1/briefs -H 'content-type: application/json' \
   -d '{"intent":"a lighthouse keeper lights the lamp in a storm","seconds":10}'
 ```
 
-`201` with a brief is success. `intent` is the only required field.
+返回稿件的 `201` 表示请求完成；`needs_review` 表示稿件仍有诊断，不能当成语义或视频效果合格证明。`intent` 是唯一必填字段。
 
 ## When something fails
 
 | what you see | what it is | what to do |
 |---|---|---|
 | `h3ir: command not found` | the venv is not on PATH | call `.venv/bin/h3ir`, or activate the venv first |
-| `the reasoning model at ... is not reachable. Start it, or set H3IR_LLM_URL` (exit 1) | the endpoint is down or the URL is wrong | fix the URL or start the server. This is the correct behaviour: it refuses to produce a worse brief silently. `Tried:` at the end of the message lists the URLs it asked and what each answered |
+| `the reasoning model at ... is not reachable. Start it, or set H3IR_LLM_URL` (exit 1) | the endpoint is down or the URL is wrong | 修复地址或启动服务；尚未得到任何完整模型稿时会返回真实接口错误。`Tried:` 列出已检查的地址与结果 |
 | `H3IR_LLM_MODEL is not set and ... names N model ids, so which one to use is a real choice and this will not guess it` (exit 1) | the endpoint routes several models and none was named | set `H3IR_LLM_MODEL` to one of the ids in the message, then check `vision_ok` in `h3ir doctor` |
 | `vision_ok: False` in `h3ir doctor` | the model you chose has no vision tower | pick one that has. Reference pictures are read through this model, so briefs with an image attached cannot work without it |
 | `the model returned the schema document instead of an instance of it (...); retrying at a higher temperature` | **expected and self-healing.** A known endpoint quirk on the analysis call, measured and documented in `backend.py`. It retries at a higher temperature and recovers | nothing. Only treat it as a failure if the command itself exits non-zero |
@@ -141,7 +136,7 @@ curl -s localhost:8420/v1/briefs -H 'content-type: application/json' \
 
 ## What not to conclude
 
-- **A warning is not a broken install.** See step 4.
+- **稿件诊断不等于安装失败。** ERROR、WARN、INFO 均随模型稿反馈，参见第4步；真实输入、文件或接口错误仍显式报错。
 - **A single run does not tell you the quality is good.** The prose model is not deterministic enough
   for one output to prove anything. `h3ir eval` scores a suite and gates against a stored baseline.
 - **`h3ir doctor` exiting 0 does not mean the endpoint works.** Read the fields.

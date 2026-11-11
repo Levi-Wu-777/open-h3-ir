@@ -546,6 +546,8 @@ class IRDocument:
             out["notice"] = ("Built from a simple description rather than a directed one — "
                              "the detailed pass did not pass checks.")
             out["degraded"] = True
+        elif self.errors and self.source in ("written", "enriched"):
+            out["notice"] = "The latest model prompt is available with unresolved validation diagnostics."
         return out
 
 

@@ -390,9 +390,13 @@ def _ir_layer(doc: IRDocument) -> dict[str, Any]:
 
 def _envelope(brief_id: str, doc: IRDocument, brief: Brief) -> dict[str, Any]:
     clar = doc.provenance.get("clarification")
-    return {
+    if not doc.ok:
+        status = "needs_review" if doc.source in ("written", "enriched") else "invalid"
+    else:
+        status = "needs_input" if clar else ("degraded" if doc.fell_back else "ready")
+    envelope = {
         "id": brief_id,
-        "status": ("needs_input" if clar else ("degraded" if doc.fell_back else "ready")),
+        "status": status,
         "source": doc.source,
         "fallback_reason": doc.fallback_reason,
         "question": clar,
@@ -401,6 +405,17 @@ def _envelope(brief_id: str, doc: IRDocument, brief: Brief) -> dict[str, Any]:
         "plan": _plan_layer(doc),
         "ir": _ir_layer(doc),
     }
+    if doc.errors:
+        envelope["errors"] = [{"rule": f.rule, "message": f.msg} for f in doc.errors]
+    return envelope
+
+
+def _choose_http_status(doc: IRDocument, success: int) -> int:
+    if doc.ok or doc.source in ("written", "enriched"):
+        return success
+    caller_facing = [f for f in doc.errors if f.rule.split("-")[0] in
+                     ("T6", "T7", "M5", "M6", "M7", "L3", "X10", "X11", "X12", "X13", "X15")]
+    return 422 if caller_facing else 500
 
 
 def _remember(brief_id: str, brief: Brief, doc: IRDocument) -> None:
@@ -674,15 +689,7 @@ def create_brief(body: BriefIn) -> JSONResponse:
     brief_id = uuid.uuid4().hex[:16]
     _remember(brief_id, brief, doc)
     env = _envelope(brief_id, doc, brief)
-    if not doc.ok:
-        # Contradictions and internal invariants are separated: a caller can act on the first
-        # and should never see the second, so an internal failure is reported as ours.
-        caller_facing = [f for f in doc.errors if f.rule.split("-")[0] in
-                         ("T6", "T7", "M5", "M6", "M7", "L3", "X10", "X11", "X12", "X13", "X15")]
-        env["errors"] = [{"rule": f.rule, "message": f.msg} for f in doc.errors]
-        env["status"] = "invalid"
-        return JSONResponse(status_code=422 if caller_facing else 500, content=env)
-    return JSONResponse(status_code=201, content=env)
+    return JSONResponse(status_code=_choose_http_status(doc, 201), content=env)
 
 
 @app.get("/v1/briefs/{brief_id}")
@@ -726,7 +733,7 @@ def refine_brief(brief_id: str, body: RefineIn) -> JSONResponse:
     env = _envelope(brief_id, doc, amended)
     env["changed"] = changed
     env["version"] = _STORE[brief_id]["versions"]
-    return JSONResponse(status_code=200, content=env)
+    return JSONResponse(status_code=_choose_http_status(doc, 200), content=env)
 
 
 @app.get("/v1/briefs/{brief_id}/prompt")

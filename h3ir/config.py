@@ -16,8 +16,10 @@ DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL = "deepseek-flash"
 DEEPSEEK_SECRET_PATH = "/accounts/deepseek"
 DEEPSEEK_SECRET_NAME = "DEEPSEEK_API_KEY"
-# 2026-11-12 同套十组的 26 次 API 调用最慢 12.03 sec，取约两倍。
-DEEPSEEK_TIMEOUT_SECONDS = 24.0
+# 2026-11-12 同套十组的 26 次 API 调用最慢 12.03 sec；用户指定单次总期限 10 sec。
+DEEPSEEK_TIMEOUT_SECONDS = 10.0
+DEEPSEEK_MAX_ATTEMPTS = 3
+DEEPSEEK_RETRY_DELAY_SECONDS = 1.0
 
 
 

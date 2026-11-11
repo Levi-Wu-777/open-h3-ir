@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -569,41 +570,57 @@ def measure_assets(refs: list[AssetRef]) -> None:
             ref.px = image_size(ref.path)
 
 
+_ANALYSIS_WORKERS = 4
+
+
+def _analyse_reference(backend: Backend, ref: AssetRef, seed: int | None,
+                       transcript: str) -> AssetCard:
+    try:
+        if ref.kind is AssetKind.IMAGE:
+            return analyse_image(backend, ref, seed=seed)
+        if ref.kind is AssetKind.AUDIO:
+            return analyse_audio(ref, transcript)
+        return analyse_video(backend, ref, seed=seed)
+    except Exception as error:
+        log.exception("asset analysis failed for %s (%s)", ref.sha256, ref.path or ref.kind.value)
+        if isinstance(error, AssetAnalysisError):
+            raise _name_the_asset(error, ref) from error
+        raise
+
+
 def analyse_all(backend: Backend, refs: list[AssetRef], *, use_cache: bool = True,
                 seed: int | None = None,
                 transcripts: dict[str, str] | None = None) -> dict[str, AssetCard]:
+    """独立素材最多四路分析；按输入顺序收集，缓存读写留在调用线程。"""
+    if not refs:
+        return {}
     out: dict[str, AssetCard] = {}
-    for ref in refs:
-        # An AUDIO card is never cached, in either direction, and that is not a performance
-        # trade: `analyse_audio` makes no model call and reads no bytes, so there is nothing to
-        # save. Every field in it comes from the REQUEST -- the role picks the summary sentence,
-        # the note becomes `characterisation` (the only channel the encoder has for how the audio
-        # sounds), the caller's recogniser supplies the transcript -- and none of those is in the
-        # cache key, which is `sha256|version|model|kind`. So the first request to attach a wav
-        # decided what every later request attaching the same wav would say about it: the live
-        # cache entry for one probe's voice reference held `transcript: ''` plus a note from an
-        # unrelated request, and that is what reached the writer on seven runs whose caller had
-        # supplied the words. Content-addressing is right for an image or a video, where the card
-        # IS derived from the bytes; here it addresses content that contributes nothing to the card.
-        cacheable = use_cache and ref.kind is not AssetKind.AUDIO
-        if cacheable:
-            hit = load_cached(ref, backend.cfg.model)
-            if hit is not None:
-                log.info("card cache hit %s", ref.sha256[:12])
-                out[ref.sha256] = hit
-                continue
-        try:
-            if ref.kind is AssetKind.IMAGE:
-                card = analyse_image(backend, ref, seed=seed)
-            elif ref.kind is AssetKind.AUDIO:
-                card = analyse_audio(ref, (transcripts or {}).get(ref.sha256, ""))
-            else:
-                card = analyse_video(backend, ref, seed=seed)
-        except AssetAnalysisError as e:
-            raise _name_the_asset(e, ref) from e
-        out[ref.sha256] = card
-        if cacheable:
-            save_cached(ref, card, backend.cfg.model)
+    pending: dict[str, Future[AssetCard]] = {}
+    results: list[tuple[AssetRef, AssetCard | Future[AssetCard], bool]] = []
+    with ThreadPoolExecutor(max_workers=min(_ANALYSIS_WORKERS, len(refs))) as executor:
+        for ref in refs:
+            cacheable = use_cache and ref.kind is not AssetKind.AUDIO
+            if cacheable:
+                key = _cache_key(ref, backend.cfg.model)
+                if key in pending:
+                    results.append((ref, pending[key], False))
+                    continue
+                hit = load_cached(ref, backend.cfg.model)
+                if hit is not None:
+                    log.info("card cache hit %s", ref.sha256[:12])
+                    results.append((ref, hit, False))
+                    continue
+            future = executor.submit(
+                _analyse_reference, backend, ref, seed, (transcripts or {}).get(ref.sha256, ""))
+            if cacheable:
+                pending[key] = future
+            results.append((ref, future, cacheable))
+
+        for ref, result, cacheable in results:
+            card = result.result() if isinstance(result, Future) else result
+            out[ref.sha256] = card
+            if cacheable:
+                save_cached(ref, card, backend.cfg.model)
     return out
 
 
