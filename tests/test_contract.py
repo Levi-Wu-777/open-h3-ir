@@ -32,13 +32,13 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 # than a discovery somebody makes on a user's machine. A failure here is not a bug: it means the
 # thing that crossed the boundary moved, and the fix is to bump `CONTRACT_VERSION` and paste the new
 # digest in. That is the whole ceremony, and it exists so the version number means something.
-PINNED_VERSION = 3
+PINNED_VERSION = 4
 PINNED = {
     "asset_fields": "38190799fcfb6cf1",
     "brief_fields": "ed51506f1a70d058",
     "dialogue_fields": "a63047779f907e58",
     "error_codes": "fd7404dbd359a11e",
-    "roles": "4b85814fed5254ab",
+    "roles": "feeebd71a6c378c1",
     "directors": "8e50d53980fd8777",
     "camera_moves": "e0ebdca0a4dcaea8",
     "limits": "447a313098e14478",

@@ -1,4 +1,4 @@
-"""分析素材、生成模型稿，并在最多两轮诊断修正后交付最新稿。"""
+"""分析素材、生成模型稿，并在最多一轮诊断修正后交付最新稿。"""
 from __future__ import annotations
 
 import logging

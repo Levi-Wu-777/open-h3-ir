@@ -36,6 +36,7 @@ ROLE_CASES = [
     (Role.FRAME_ANCHOR_LAST, AssetKind.IMAGE, Mode.L2VA),
     (Role.EDIT_SOURCE, AssetKind.VIDEO, Mode.REF2VA),
     (Role.CONTINUATION_SOURCE, AssetKind.VIDEO, Mode.REF2VA),
+    (Role.AUDIO_REFERENCE, AssetKind.AUDIO, Mode.REF2VA),
     (Role.VOICE_TIMBRE, AssetKind.AUDIO, Mode.REF2VA),
     (Role.BGM, AssetKind.AUDIO, Mode.REF2VA),
     (Role.MUSIC_STYLE, AssetKind.AUDIO, Mode.REF2VA),

@@ -205,6 +205,7 @@ def analyse_audio(ref: AssetRef, transcript: str = "", *,
     The prose stage then writes around those facts instead of about the sound.
     """
     role_summary = {
+        Role.AUDIO_REFERENCE: "an audio reference",
         Role.VOICE_TIMBRE: "a spoken vocal reference supplying voice timbre and delivery",
         Role.BGM: "a background music track",
         Role.MUSIC_STYLE: "a music-style reference supplying instrumentation and tempo",

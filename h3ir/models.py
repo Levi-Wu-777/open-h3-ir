@@ -74,6 +74,7 @@ class Role(str, Enum):
     # sentence is what the deterministic draft ships when the writer fails.
     PLACED_SUBJECT = "placed_subject"
     REPLACEMENT_SUBJECT = "replacement_subject"
+    AUDIO_REFERENCE = "audio_reference"
     VOICE_TIMBRE = "voice_timbre"
     BGM = "bgm"
     # ref-en.txt 2.4 lists five uses for an <Audio N> and three of them had a role: copying the
@@ -108,7 +109,7 @@ AUDIO_MARKERS = ("fully_copy", "partially_copy", "reference", "weak_reference")
 # marker table and the task-type derivation in plan.py, the fact the ask states in prose.py, and the
 # rules that refuse a copy claim in validate.py. A role added to one and forgotten in another is how
 # a document ends up claiming a copy the wiring does not perform.
-AUDIO_REFERENCE_ROLES = (Role.VOICE_TIMBRE, Role.SFX, Role.MUSIC_STYLE, Role.BEAT_REFERENCE)
+AUDIO_REFERENCE_ROLES = (Role.AUDIO_REFERENCE, Role.VOICE_TIMBRE, Role.SFX, Role.MUSIC_STYLE, Role.BEAT_REFERENCE)
 AUDIO_REFERENCE_ROLE_VALUES = tuple(r.value for r in AUDIO_REFERENCE_ROLES)
 
 # The picture roles whose meaning is a statement about an attached `edit_source` clip. A contract

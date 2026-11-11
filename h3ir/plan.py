@@ -192,6 +192,7 @@ _ROLE_MARKER = {
 # dialogue content, or sound texture is referenced", which is that sentence exactly. So the marker
 # table was the wrong side of the contradiction.
 _AUDIO_MARKER = {
+    Role.AUDIO_REFERENCE: "reference",
     Role.BGM: "partially_copy",
     Role.SFX: "reference",
     Role.VOICE_TIMBRE: "reference",
@@ -760,7 +761,9 @@ def audio_relations(plan: Plan) -> list[tuple[str, str, str]]:
         if m.kind is not AssetKind.AUDIO:
             continue
         marker = _AUDIO_MARKER.get(m.role, "reference")
-        if m.role is Role.VOICE_TIMBRE:
+        if m.role is Role.AUDIO_REFERENCE:
+            note = f"{m.label} is referenced according to the caller's request"
+        elif m.role is Role.VOICE_TIMBRE:
             note = (f"the target speaker follows {m.label}'s voice timbre and delivery "
                     "without copying the original signal")
         elif m.role is Role.BGM:

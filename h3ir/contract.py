@@ -52,7 +52,7 @@ from .shots import PINNED_SHOTS_MAX
 # 2 are interchangeable" -- what it needs to know is whether the particular field, role or limit IT
 # is about to use exists on the other side, and that is answered by comparing the sections, not the
 # number. The number is what a message quotes so two people can say which contract they each have.
-CONTRACT_VERSION = 3
+CONTRACT_VERSION = 4
 
 
 # --------------------------------------------------------------------------- the wire
@@ -167,7 +167,7 @@ ROLES_BY_KIND: dict[str, tuple[Role, ...]] = {
               Role.STYLE, Role.STORYBOARD, Role.PLACED_SUBJECT, Role.REPLACEMENT_SUBJECT),
     "video": (Role.EDIT_SOURCE, Role.CONTINUATION_SOURCE, Role.SUBJECT, Role.ENVIRONMENT,
               Role.STYLE, Role.STORYBOARD, Role.STRUCTURE),
-    "audio": (Role.VOICE_TIMBRE, Role.BGM, Role.MUSIC_STYLE, Role.BEAT_REFERENCE, Role.SFX),
+    "audio": (Role.AUDIO_REFERENCE, Role.VOICE_TIMBRE, Role.BGM, Role.MUSIC_STYLE, Role.BEAT_REFERENCE, Role.SFX),
 }
 
 # The dial, the shapes and the languages a request may name. All three were literals inside

@@ -126,7 +126,9 @@ def render_subject_definitions(plan: Plan) -> str:
         # nothing at all.
         said = m.characterisation
         detail = f" — {said}" if said else ""
-        if m.role is Role.VOICE_TIMBRE and sid:
+        if m.role is Role.AUDIO_REFERENCE:
+            lines.append(f"{m.label} is an audio reference for the target video{detail}.")
+        elif m.role is Role.VOICE_TIMBRE and sid:
             who = f"{subj} {sid}" if subj else f"the speaker {sid}"
             lines.append(f"{m.label} is the voice-timbre reference for {who}, "
                          f"containing a spoken vocal layer{detail}.")
