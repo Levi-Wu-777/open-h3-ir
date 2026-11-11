@@ -63,6 +63,8 @@ def _language_instruction(language: str) -> str:
         "that the on-screen character's lips remain closed after every voiceover block. "
         "For speech crossing a cut, retain both <scenetrans> markers and explicitly describe "
         "the uninterrupted audio in the requested language. "
+        "In complete H3 prompt documents, place every shot declaration, including [Shot 1], "
+        "at the start of a separate line; never join multiple shot declarations on one line. "
         "Preserve caller-supplied dialogue and on-screen text verbatim in their "
         "original language; do not translate them to the output language."
     )
