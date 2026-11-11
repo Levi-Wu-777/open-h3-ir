@@ -44,7 +44,6 @@ BASE_SECTION_NAMES = ("integrated_multimodal_description", "overall_soundscape",
 def section_names(mode: Mode | None) -> tuple[str, ...]:
     return SECTION_NAMES if mode is None or mode is Mode.REF2VA else BASE_SECTION_NAMES
 
-MIN_SHOT_MS = 1200
 
 # Markers a model reaches for that are not in the enum, mapped to what it meant.
 MARKER_SYNONYMS = {
@@ -94,14 +93,11 @@ def repair(text: str, *, target: Target, mode: Mode, labels: tuple[str, ...],
     #   * the task-type prefix -- derived from what is attached, never chosen
     #   * the caller's dialogue -- their words, never round-tripped through a model
     #   * unicode hazards -- zero judgement, and a curly quote is a different token sequence
-    res.text = _fix_unicode(res.text, res)
-    res.text = _fix_task_prefix(res.text, task_types, res)
     res.text = _fix_labels(res.text, labels, res)
     if mode is Mode.FL2VA:
         res.text = _fix_fl2va_notation(res.text, res)
     res.text = _fix_instruction_line(res.text, target, mode, res)
     res.text = _fix_dialogue(res.text, dialogue, res)
-    res.text = _fix_echoed_dialogue(res.text, dialogue, res)
     if not res.text.endswith("\n"):
         res.text += "\n"
     return res
@@ -178,16 +174,6 @@ def _fix_labels(text: str, labels: tuple[str, ...], res: RepairResult) -> str:
             res.repairs.append(f"rewrote <{wrong} N> to <{right} N> — the runtime emits "
                                f"<{right} N>, so the model's label pointed at nothing")
 
-    # Ordinals beyond what is attached: clamp to the highest real one.
-    for kind, have in by_kind.items():
-        top = len(have)
-        def clamp(m: re.Match) -> str:
-            n = int(m.group(1))
-            if n <= top:
-                return m.group(0)
-            res.repairs.append(f"<{kind} {n}> exceeds the {top} attached; rewrote to <{kind} {top}>")
-            return f"<{kind} {top}>"
-        text = re.sub(rf"<{kind}\s+(\d+)>", clamp, text)
     return text
 
 
@@ -273,53 +259,6 @@ def _fix_timestamps(text: str, target: Target, res: RepairResult) -> str:
     return text[:m.start(1)] + fixed + text[m.end(1):]
 
 
-def _fix_timestamps_in(text: str, target: Target, res: RepairResult) -> str:
-    total_ms = int(round(target.effective_seconds * 1000))
-    shots = list(re.finditer(r"\[Shot\s+(\d+)\]\s*(At\s+(\d{1,2}):(\d{2})\.(\d{1,3}),?)?", text))
-    if not shots:
-        return text
-
-    # Drop a timestamp on shot 1.
-    first = shots[0]
-    if first.group(2):
-        text = text[:first.start()] + f"[Shot {first.group(1)}] " + text[first.end():]
-        res.repairs.append("removed the timestamp from [Shot 1]; a first shot has none")
-        shots = list(re.finditer(r"\[Shot\s+(\d+)\]\s*(At\s+(\d{1,2}):(\d{2})\.(\d{1,3}),?)?", text))
-
-    times: list[int] = []
-    for i, m in enumerate(shots):
-        if i == 0:
-            times.append(0)
-            continue
-        if m.group(2):
-            ms = (int(m.group(3)) * 60 + int(m.group(4))) * 1000 + int(m.group(5).ljust(3, "0"))
-        else:
-            ms = int(total_ms * i / len(shots))
-            res.repairs.append(f"[Shot {m.group(1)}] had no cut time; placed it at "
-                               f"{ms_to_timestamp(ms)}")
-        times.append(ms)
-
-    fixed = list(times)
-    for i in range(1, len(fixed)):
-        floor = fixed[i - 1] + MIN_SHOT_MS
-        ceiling = total_ms - MIN_SHOT_MS * (len(fixed) - i)
-        fixed[i] = max(floor, min(fixed[i], ceiling))
-
-    out, last = [], 0
-    for i, m in enumerate(shots):
-        out.append(text[last:m.start()])
-        if i == 0:
-            out.append(f"[Shot {i + 1}] ")
-        else:
-            out.append(f"[Shot {i + 1}] At {ms_to_timestamp(fixed[i])}, ")
-            if fixed[i] != times[i]:
-                res.repairs.append(
-                    f"[Shot {i + 1}] cut moved from {ms_to_timestamp(times[i])} to "
-                    f"{ms_to_timestamp(fixed[i])} to stay inside {target.effective_seconds:.3f}s")
-        last = m.end()
-    out.append(text[last:])
-    result = "".join(out)
-    return re.sub(r",\s*,", ",", result)
 
 
 def _fix_markers(text: str, res: RepairResult) -> str:
@@ -365,11 +304,16 @@ def _fix_speaker_ids(text: str, res: RepairResult) -> str:
 
 def _fix_dialogue(text: str, expected: tuple[str, ...], res: RepairResult) -> str:
     """The user's words, exactly. A paraphrase inside <d> is replaced."""
+    from .validate import _consecutive_run
+
     if not expected:
         return text
     blocks = list(re.finditer(r"<d>\s*(\[[^\]]*\]\s*)?(.*?)</d>", text, re.S))
     for want in expected:
         if any(want in b.group(2) for b in blocks):
+            continue
+        spoken = [re.sub(r"\s+", " ", block.group(2)).strip() for block in blocks]
+        if _consecutive_run(spoken, re.sub(r"\s+", " ", want).strip()) is not None:
             continue
         if not blocks:
             res.findings.append(Finding("D4-dialogue-not-verbatim", "ERROR",

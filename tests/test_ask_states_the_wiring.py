@@ -89,30 +89,36 @@ def test_a_base_mode_is_never_handed_a_subject_definition_line():
 
 
 def test_a_base_mode_is_told_the_label_does_not_exist_in_its_format():
-    ask = _ask(Mode.I2VA, Role.FRAME_ANCHOR_FIRST, "Animate this photo: the car pulls forward.")
-    assert "NO subject_definitions section" in ask
-    assert "`<Subject N>` does not exist in it" in ask
+    import json
+    ask = _ask(Mode.I2VA, Role.FRAME_ANCHOR_FIRST, 'Animate this photo: the car pulls forward.')
+    facts = json.loads(ask.split('\n\n', 1)[1])
+    assert facts['mode'] == 'i2va'
+    assert facts['subjects'] == []
 
 
 def test_a_base_mode_is_told_to_cite_the_picture():
-    """The other half of the pair: L4 fired because `<Picture 1>` was never named at all."""
-    ask = _ask(Mode.I2VA, Role.FRAME_ANCHOR_FIRST, "Animate this photo: the car pulls forward.")
-    assert "Cite each picture above by its label" in ask
-    assert "costs rows on every sampling step" in ask
+    import json
+    ask = _ask(Mode.I2VA, Role.FRAME_ANCHOR_FIRST, 'Animate this photo: the car pulls forward.')
+    facts = json.loads(ask.split('\n\n', 1)[1])
+    assert facts['available_labels'] == ['<Picture 1>']
+    assert facts['asset_requests'][0]['role'] == 'frame_anchor_first'
+    assert 'costs rows' not in ask
 
 
 def test_the_first_frame_anchor_is_stated_as_the_first_frame():
-    ask = _ask(Mode.I2VA, Role.FRAME_ANCHOR_FIRST, "Animate this photo: the car pulls forward.")
-    assert "<Picture 1> IS the target video's first frame, at 0.00 seconds" in ask
-    assert "shows the black supercar (carbon fibre body, orange underglow)" in ask
+    import json
+    ask = _ask(Mode.I2VA, Role.FRAME_ANCHOR_FIRST, 'Animate this photo: the car pulls forward.')
+    facts = json.loads(ask.split('\n\n', 1)[1])
+    assert facts['picture_roles'] == [['<Picture 1>', 'frame_anchor_first']]
+    assert facts['asset_cards'][0]['subjects'][0]['descriptor'] == 'the black supercar'
 
 
 def test_the_last_frame_anchor_is_stated_as_the_last_frame():
-    """l2va's picture is the END. The spec is explicit that it does not belong to [Shot 1], and a
-    fact sheet that got this backwards would be worse than none."""
-    ask = _ask(Mode.L2VA, Role.FRAME_ANCHOR_LAST, "End on this photo of the car.")
-    assert "IS the target video's last frame" in ask
-    assert "does not belong to [Shot 1]" in ask
+    import json
+    ask = _ask(Mode.L2VA, Role.FRAME_ANCHOR_LAST, 'End on this photo of the car.')
+    facts = json.loads(ask.split('\n\n', 1)[1])
+    assert facts['picture_roles'] == [['<Picture 1>', 'frame_anchor_last']]
+    assert facts['mode'] == 'l2va'
 
 
 def test_a_base_mode_is_not_told_about_task_types_it_does_not_have():
@@ -126,13 +132,12 @@ def test_a_base_mode_is_not_told_about_task_types_it_does_not_have():
 # ---------------------------------------------------------------- ref2va: not a frame
 
 def test_a_reference_brief_is_told_its_pictures_are_not_frames():
-    """The cause of R10. The rule is right -- this checkpoint has no exact-frame mechanism, which is
-    also why an anchor role arriving here is downgraded with X10 -- and the model had no way to know
-    which case it was in, because the spec in its system prompt teaches both."""
-    ask = _ask(Mode.REF2VA, Role.SUBJECT, "Put this car in a night race through a tunnel.")
-    assert "None of the pictures here is a frame of the target video." in ask
-    assert "is the first frame of" in ask, "the forbidden phrase is quoted so it is unmistakable"
-    assert "never claim `keyframe completion`" in ask
+    import json
+    ask = _ask(Mode.REF2VA, Role.SUBJECT, 'Put this car in a night race through a tunnel.')
+    facts = json.loads(ask.split('\n\n', 1)[1])
+    assert facts['picture_roles'] == [['<Picture 1>', 'subject']]
+    assert facts['asset_requests'][0]['role'] == 'subject'
+    assert 'never claim' not in ask
 
 
 def test_the_statement_is_read_off_the_wiring_and_not_asserted():

@@ -32,16 +32,16 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 # than a discovery somebody makes on a user's machine. A failure here is not a bug: it means the
 # thing that crossed the boundary moved, and the fix is to bump `CONTRACT_VERSION` and paste the new
 # digest in. That is the whole ceremony, and it exists so the version number means something.
-PINNED_VERSION = 2
+PINNED_VERSION = 3
 PINNED = {
     "asset_fields": "38190799fcfb6cf1",
-    "brief_fields": "cf2fb5307dd7d72f",
+    "brief_fields": "ed51506f1a70d058",
     "dialogue_fields": "a63047779f907e58",
-    "error_codes": "19906fa6afaf0a20",
+    "error_codes": "fd7404dbd359a11e",
     "roles": "4b85814fed5254ab",
     "directors": "8e50d53980fd8777",
     "camera_moves": "e0ebdca0a4dcaea8",
-    "limits": "78554cef21934947",
+    "limits": "447a313098e14478",
 }
 
 
@@ -319,7 +319,7 @@ def test_the_generated_module_carries_the_moves_and_the_cap():
     js = C.as_js()
     block = js[js.index("export const CAMERA_MOVES = ["):js.index("export const DIRECTORS = [")]
     assert tuple(json.loads(m) for m in re.findall(r'("(?:[^"\\]|\\.)*")', block)) == D.CAMERA_MOVES
-    assert re.search(rf"^export const MAX_NOTES = {D.MAX_NOTES_CHARS};$", js, re.MULTILINE)
+    assert re.search(rf"^export const MAX_NOTES = {json.dumps(D.MAX_NOTES_CHARS)};$", js, re.MULTILINE)
     assert re.search(rf"^export const CONTRACT_VERSION = {C.CONTRACT_VERSION};$", js, re.MULTILINE)
     assert re.search(rf'^export const DIRECTORS_DIGEST = "{C.digests()["directors"]}";$', js,
                      re.MULTILINE)

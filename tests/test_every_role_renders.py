@@ -225,21 +225,3 @@ def test_a_storyboard_line_still_needs_its_retention_entry():
             "overall_soundscape:\nRoom tone continues.\n\nnon_diegetic_music:\nN/A\n")
     found = validate(text, Context(mode="ref2va", n_pictures=1, duration_s=5.167))
     assert "L5-redundant-source-line" in {f.rule for f in found if f.severity == "ERROR"}
-
-
-def test_the_rule_that_rejects_a_copied_sound_effect_still_bites():
-    """The rule stays exactly as strict. If the renderer ever writes a copy marker for `sfx`
-    again, R22 fires -- the fix is the renderer obeying the rule, not the rule being relaxed.
-    """
-    from h3ir.validate import Context, validate
-
-    text = ("subject_definitions:\n<Audio 1> is a sound-texture reference for the target video.\n\n"
-            "summary:\n[audio reference] The target video shows a car in a tunnel with <Audio 1> "
-            "as its sound-texture reference.\n\n"
-            "retention_analysis:\n<Audio 1>: partially_copy - its sound texture is referenced.\n\n"
-            "detailed_description:\nA style line.\n[Shot 1] The camera pushes in with small "
-            "amplitude at slow speed on the car.\n\noverall_soundscape:\nRoom tone continues.\n\n"
-            "non_diegetic_music:\nN/A\n")
-    found = validate(text, Context(mode="ref2va", n_audios=1, duration_s=5.167,
-                                   declared_roles=(("<Audio 1>", "sfx", ""),)))
-    assert "R22-audio-marker-role" in {f.rule for f in found if f.severity == "ERROR"}

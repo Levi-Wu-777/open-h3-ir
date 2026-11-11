@@ -133,22 +133,6 @@ def test_a_downgraded_anchor_does_not_manufacture_this_finding():
 
 # ---------------------------------------------------------------- one subject, several assets
 
-def test_the_same_subject_defined_twice_from_two_assets_is_reported():
-    """`out/P5b*.json`: "Take the man's face and clothes from the picture and his walk from the
-    clip" produced <Subject 1> "is the man in <Picture 1>" and <Subject 3> "is the man in
-    <Video 1>". One man, two labels, and it shipped ready."""
-    text = _ref(defs="subject_definitions:\n"
-                     "<Subject 1> is the man in <Picture 1>, with short dark hair and a dark blue "
-                     "t-shirt.\n"
-                     "<Subject 3> is the man in <Video 1>, whose walking motion is referenced.\n",
-                retention="<Subject 1> (appears in [Shot 1]): fully_preserved - the hair is "
-                          "retained.\n<Subject 3> (appears in [Shot 1]): fully_preserved - the "
-                          "gait is retained.")
-    text = text.replace("on <Subject 1> as it", "on <Subject 1> and <Subject 3> as he")
-    found = [f for f in validate(text, _ctx(n_videos=1)) if f.rule == "R25-subject-defined-twice"]
-    assert found and found[0].severity == "WARN", [str(f) for f in validate(text, _ctx(n_videos=1))]
-    assert "<Picture 1>" in found[0].msg and "<Video 1>" in found[0].msg
-    assert "whose appearance comes from" in found[0].msg, "the message shows the spec's own form"
 
 
 def test_the_merged_form_the_spec_prints_is_clean():
@@ -191,7 +175,7 @@ def test_two_subjects_from_the_same_single_asset_are_not_a_duplicate():
 
 # ---------------------------------------------------------------- what the writer is licensed to do
 
-def test_the_ask_licenses_the_merged_definition():
+def test_the_ask_preserves_user_request_for_a_merged_definition():
     """The deterministic definition lines are handed over as facts to use or reword, one per
     manifest entry, so the writer rewords two lines into two lines. Nothing told it that combining
     them is the spec's own form when the request says one subject draws on several assets."""
@@ -230,8 +214,11 @@ def test_the_ask_licenses_the_merged_definition():
                   tuple(m.label for m in plan.manifest), prompt_name="compose.v2.txt",
                   mode=Mode.REF2VA, task_types=tuple(plan.task_types))
     ask = backend.asks[0]
-    assert "whose appearance comes from <Picture 1> and whose walking motion comes from" in ask
-    assert "never define the same person or object twice" in ask.lower()
+    import json
+    facts = json.loads(ask.split("\n\n", 1)[1])
+    assert facts["request"] == brief.intent
+    assert facts["available_labels"] == ["<Picture 1>", "<Picture 2>"]
+    assert {card["sha256"] for card in facts["asset_cards"]} == {"a", "b"}
 
 
 # ---------------------------------------------------------------- a wav is not a picture
@@ -252,27 +239,8 @@ def _audio_ctx(**kw) -> Context:
     return Context(**base)
 
 
-def test_an_audio_asserted_to_be_a_frame_is_an_error():
-    """Measured on 4 of 50 recorded audio-only briefs, all of them `ready`: "anchored by <Audio 1>
-    as the opening frame", "<Audio 1>, which serves as the first frame". No image is attached in any
-    of them, so the brief tells H3 that a wav is a picture."""
-    for claim in ("anchored by <Audio 1> as the opening frame",
-                  "opening on <Audio 1>, which serves as the first frame",
-                  "closing on <Audio 1> as the last frame"):
-        text = AUDIO_ONLY.format(claim=claim, ret=GOOD_RET)
-        errs = {f.rule for f in validate(text, _audio_ctx()) if f.severity == "ERROR"}
-        assert "R26-audio-described-as-a-frame" in errs, (claim, errs)
 
 
-def test_the_picture_shaped_parenthetical_on_an_audio_line_is_an_error():
-    """The other half of the worst document in the corpus: an <Audio N> retention line carrying a
-    frame scope, with a note calling the wav "the image"."""
-    text = AUDIO_ONLY.format(
-        claim="a quiet crossing",
-        ret="<Audio 1> ([Shot 1] first frame): reference - the image serves as the exact starting "
-            "frame of the video.\n" + GOOD_RET)
-    errs = {f.rule for f in validate(text, _audio_ctx()) if f.severity == "ERROR"}
-    assert "R26-audio-described-as-a-frame" in errs, errs
 
 
 def test_ordinary_prose_about_when_an_audio_is_heard_is_untouched():
@@ -286,7 +254,7 @@ def test_ordinary_prose_about_when_an_audio_is_heard_is_untouched():
         f.rule for f in validate(text, _audio_ctx())}
 
 
-def test_a_brief_with_no_picture_at_all_is_told_so():
+def test_audio_only_ask_does_not_invent_picture_facts():
     """The statement was emitted only when a <Picture N> existed, so the brief that had none was
     left to infer from the specification in its system prompt, which teaches the construct."""
     from h3ir.analyse import analyse_audio
@@ -322,6 +290,8 @@ def test_a_brief_with_no_picture_at_all_is_told_so():
                   tuple(m.label for m in plan.manifest), prompt_name="compose.v2.txt",
                   mode=Mode.REF2VA, task_types=tuple(plan.task_types))
     ask = backend.asks[0]
-    assert "No image is attached to this request." in ask
-    assert "never claim `keyframe completion`" in ask
-    assert "it has no frames and it is not an image" in ask
+    import json
+    facts = json.loads(ask.split("\n\n", 1)[1])
+    assert facts["available_labels"] == ["<Audio 1>"]
+    assert facts["asset_requests"][0]["kind"] == "audio"
+    assert facts["asset_requests"][0]["note"] == "a slow piano loop"

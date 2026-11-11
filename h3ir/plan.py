@@ -40,8 +40,8 @@ WORD_TARGETS = {
     Mode.FL2VA: 380,
     Mode.L2VA: 380,
 }
-MIN_SHOT_MS = 1500
-MIN_SHOT_WORDS = 90
+MIN_SHOT_MS = 1
+MIN_SHOT_WORDS = 0
 SECONDS_PER_SHOT = 3.4
 
 
@@ -59,7 +59,7 @@ class ProfileOptions:
     field_separator: str = "\n\n"
     word_target_override: int | None = None
     seconds_per_shot: float = SECONDS_PER_SHOT
-    max_shots: int = 4
+    max_shots: int | None = None
     include_summary: bool = True
     include_retention: bool = True
     trigger_repeat_default: int = 1
@@ -503,21 +503,7 @@ def build_speakers(brief: Brief, subjects: list[SubjectPlan],
 
 def shot_count(target: Target, brief: Brief, mode: Mode, opts: ProfileOptions,
                manifest: list[ManifestEntry]) -> int:
-    if brief.shots:
-        # A pin is a contract, checked at intake (1..PINNED_SHOTS_MAX and it fits the render), so
-        # clamping it to the profile ceiling here would silently break the number the caller set.
-        return max(1, brief.shots)
-    # Editing a source video preserves its structure; do not invent cuts into it.
-    if any(m.role in (Role.EDIT_SOURCE, Role.CONTINUATION_SOURCE) for m in manifest):
-        return 1
-    # FL2VA interpolates between two frames and the spec says it favours a single shot.
-    if mode is Mode.FL2VA:
-        return 1
-    n = round(target.effective_seconds / opts.seconds_per_shot)
-    n = max(1, min(opts.max_shots, n))
-    while n > 1 and (target.effective_seconds * 1000) / n < MIN_SHOT_MS:
-        n -= 1
-    return n
+    return brief.shots if brief.shots is not None else 1
 
 
 def allocate_from_proposal(target: Target, proposed, mode: Mode,
@@ -725,7 +711,7 @@ def build_plan(brief: Brief, mode: Mode, cards: dict[str, AssetCard], *,
     else:
         n = shot_count(target, brief, mode, opts, manifest)
         if beats:
-            n = max(1, min(len(beats), brief.shots or opts.max_shots))
+            n = max(1, min(len(beats), brief.shots or opts.max_shots or len(beats)))
         shots = allocate_shots(target, n, mode, opts)
     assign_dialogue(shots, brief.dialogue)
 

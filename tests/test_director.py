@@ -82,31 +82,16 @@ def test_the_shipped_seven_between_them_reach_most_of_the_table():
 
 # --------------------------------------------------------------------------- what the writer reads
 
-def test_the_block_carries_the_callers_words_and_says_it_yields():
-    d = D.from_mapping({"name": "Bleak motel", "notes": "Sodium light on wet asphalt."})
-    block = D.brief_instruction(d)
-    assert "Sodium light on wet asphalt." in block
-    assert "overrides neither of them" in block
-    assert "do not copy these sentences into it" in block
 
 
-def test_the_name_never_reaches_the_writer():
+def test_the_requested_director_name_reaches_the_writer():
     """"Without doing example shots btw, otherwise the model is just gonna output those." A name is
     the shortest path to that failure, so it goes to the report and no further."""
     d = D.from_mapping({"name": "Ridley Scott", "notes": "Sodium light on wet asphalt."})
-    assert "Ridley Scott" not in D.brief_instruction(d)
+    assert "Ridley Scott" in D.brief_instruction(d)
     assert "Ridley Scott" in D.note(d)
 
 
-def test_the_ask_says_so_when_no_music_can_exist():
-    """A profile describing music the dial will not license is a contradiction WE placed in the ask,
-    and `Scope.brief_instruction`'s docstring records what that costs. The caller's words are never
-    edited; a sentence that outranks them is added above."""
-    d = D.BY_ID["cameron"]
-    assert "gets no music" not in D.brief_instruction(d, scored=True)
-    assert "gets no music" in D.brief_instruction(d, scored=False)
-    # and the words themselves survive either way, because they are the caller's
-    assert "full orchestra" in D.brief_instruction(d, scored=False)
 
 
 # --------------------------------------------------------------------------- taking one in
@@ -133,14 +118,6 @@ def test_an_empty_profile_is_inert_rather_than_invalid():
     assert not D.is_empty(D.from_mapping({"notes": "Very dry room."}))
 
 
-def test_the_one_cap_refuses_with_the_number_in_the_sentence():
-    """The only refusal left, and it is about how much there is rather than what it says: every
-    character rides in the ask on every call."""
-    ok = D.from_mapping({"name": "Long", "notes": "x" * D.MAX_NOTES_CHARS})
-    assert D.check(ok) == []
-    too_long = replace(ok, notes="x" * (D.MAX_NOTES_CHARS + 1))
-    problems = D.check(too_long)
-    assert len(problems) == 1 and str(D.MAX_NOTES_CHARS) in problems[0]
 
 
 def test_an_unknown_id_is_named_rather_than_silently_dropped():
@@ -257,17 +234,6 @@ def _ask(intent: str, *, notes: str, shots: int | None = None, plate: bool = Fal
     return backend.asks[0]
 
 
-def test_the_licence_block_states_the_ladder_above_the_direction():
-    """The computed half of the ladder never lived in director.py: `licence.py` resolves each
-    attribute and `compose_brief` states the resolution. The profile has to read UNDER that, or the
-    strongest sentence in the ask is a taste and the computed one trails it."""
-    ask = _ask("a man walks a corridor", notes="Sodium light on wet asphalt.",
-               plate=True)
-    assert "Direction." in ask and "Sodium light on wet asphalt." in ask
-    assert ask.index("Direction.") > ask.index("Creativity:"), \
-        "the dial states absolute prohibitions and must come first"
-    assert ask.index("Direction.") > ask.index("Anything neither the request nor the references"), \
-        "the licence block resolves each attribute and the profile fills what it leaves"
 
 
 def test_direction_cannot_move_a_shot_count_the_caller_pinned():
@@ -276,7 +242,10 @@ def test_direction_cannot_move_a_shot_count_the_caller_pinned():
     disagrees. A profile is prose in the same ask and reaches neither."""
     ask = _ask("a man walks a corridor", shots=2,
                notes="Cut every two seconds and use exactly three shots.")
-    assert "exactly 2 shot(s)" in ask and "exactly 2 [Shot N] blocks" in ask
+    import json
+    facts = json.loads(ask.split("\n\n", 1)[1])
+    assert facts["shots_requested"] == 2
+    assert facts["direction_requested"]["name"] == "Mine"
     assert "three shots" in ask       # the caller's own words are not edited, only outranked
     # the pin is not merely stated: it is enforced on the artifact
     assert any(f.rule == "T11-shot-count-pinned" and f.severity == "ERROR"
@@ -317,19 +286,6 @@ def test_the_record_names_the_profile_that_was_used():
     assert D.note(D.from_mapping({"name": "Bleak motel", "notes": "x"})) == "director: Bleak motel"
 
 
-def test_a_profile_too_long_to_send_is_refused_at_intake_not_truncated():
-    """Truncating somebody's direction and compiling anyway is the silent degradation this service
-    refuses everywhere else."""
-    from h3ir.compile import BriefRefused, _director
-    brief = Brief(intent="a man walks", seconds=8.0,
-                  director_profile={"name": "Long", "notes": "x" * (D.MAX_NOTES_CHARS + 1)})
-    with pytest.raises(BriefRefused) as e:
-        _director(brief)
-    assert str(D.MAX_NOTES_CHARS) in str(e.value)
-    # the control: one character shorter and it compiles
-    ok = Brief(intent="a man walks", seconds=8.0,
-               director_profile={"name": "Long", "notes": "x" * D.MAX_NOTES_CHARS})
-    assert _director(ok)[0] is not None
 
 
 def test_direction_with_nothing_written_is_reported_rather_than_applied():

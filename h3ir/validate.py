@@ -17,6 +17,7 @@ from typing import Iterable
 
 from .creativity import (COMMITS_CAMERA, MAXIMAL_CAMERA, ONSCREEN_TEXT, SCORE, SPEECH,
                          Scope)
+from .policies import enabled
 from .grid import INSTRUCTION_OPENINGS, instruction_line_for, s_ss_text
 from .models import (AMPLITUDES, AUDIO_MARKERS, AUDIO_REFERENCE_ROLE_VALUES, CAMERA_TYPES, Finding,
                      Role, SPEEDS, TASK_TYPES, VISUAL_MARKERS)
@@ -234,7 +235,8 @@ def _consecutive_run(spoken: list[str], want: str) -> tuple[int, int] | None:
     """
     for i in range(len(spoken)):
         for j in range(i + 1, len(spoken)):
-            if want in " ".join(spoken[i:j + 1]):
+            pattern = " ?".join(re.escape(part) for part in spoken[i:j + 1])
+            if re.fullmatch(pattern, want):
                 return i, j
     return None
 
@@ -291,6 +293,7 @@ class Context:
     # every caller that predates the dial gets -- including the golden controls and the independent
     # validator, neither of which knows what was asked.
     scope: Scope | None = None
+    prompt_language: str = "English"
 
 
 def _sections(text: str, names: Iterable[str]) -> tuple[dict[str, str], list[str]]:
@@ -361,9 +364,13 @@ def _strip_verbatim(s: str) -> str:
 def validate(text: str, ctx: Context | None = None, **kw) -> list[Finding]:
     ctx = ctx or Context(**kw)
     f: list[Finding] = []
-    add = lambda r, s, m: f.append(Finding(r, s, m))  # noqa: E731
+    def add(rule, severity, message):
+        if enabled(rule):
+            f.append(Finding(rule, severity, message))
 
     is_ref = ctx.mode == "ref2va"
+    language = ctx.prompt_language.strip().casefold().replace("_", "-")
+    english_lexical_checks = language in ("english", "en", "英文", "英语") or language.startswith("en-")
     names = REF_SECTIONS if is_ref else BASE_SECTIONS
     sec, order = _sections(text, names)
     main_field = "detailed_description" if is_ref else "integrated_multimodal_description"
@@ -469,13 +476,12 @@ def validate(text: str, ctx: Context | None = None, **kw) -> list[Finding]:
 
     defined_subj = set()
     for line in defs.splitlines():
-        m = re.match(r"\s*<Subject\s+(\d+)>\s+is\b", line)
+        m = re.match(r"\s*<Subject\s+(\d+)>[^\S\n]*\S", line)
         if m:
             defined_subj.add(int(m.group(1)))
     for n in sorted(used["Subject"] - defined_subj):
         add("L2-undefined-subject", "ERROR",
-            f"<Subject {n}> is used but never defined with '<Subject {n}> is ...' in "
-            "subject_definitions (a colon form does not register as a definition)")
+            f"<Subject {n}> is used but not defined in subject_definitions")
 
     for kind, n_have in (("Picture", ctx.n_pictures), ("Video", ctx.n_videos),
                          ("Audio", ctx.n_audios)):
@@ -1129,7 +1135,11 @@ def validate(text: str, ctx: Context | None = None, **kw) -> list[Finding]:
             add("T3-timestamp-format", "ERROR",
                 f"[Shot {n}] time must be MM:SS.mmm, got 'At {loose.group(1)}.{loose.group(2)}'")
         else:
-            add("T4-missing-cut-time", "ERROR", f"[Shot {n}] has no 'At MM:SS.mmm' cut time")
+            add("T4-missing-cut-time", "ERROR",
+                f"[Shot {n}] must begin with '[Shot {n}] At MM:SS.mmm'. At is a literal "
+                "structural token even in non-English prose. Keep the existing cut time if "
+                "present and replace a translated prefix such as '在' with 'At'; do not "
+                "translate At or omit the cut time")
     if nums and nums != list(range(1, len(nums) + 1)):
         add("T8-shot-numbering", "ERROR", f"shot numbers must be contiguous from 1, got {nums}")
     if ctx.pinned_shots and nums and len(nums) != ctx.pinned_shots:
@@ -1547,7 +1557,7 @@ def validate(text: str, ctx: Context | None = None, **kw) -> list[Finding]:
                        if n_marks == 1 else "neither side of the join is marked")
                     + ". base-en.txt 4.4 puts <scenetrans> at the connecting points in both parts: "
                     "once after the first part's </d> and once before the second part's <d>")
-            elif not CONTINUITY_STATED.search(gap):
+            elif english_lexical_checks and not CONTINUITY_STATED.search(gap):
                 add("D12-split-line-no-continuity-statement", "WARN",
                     "the join is marked but nothing states that the audio continues across it; "
                     "base-en.txt 4.4 asks for it explicitly and offers `continues seamlessly "
@@ -1597,7 +1607,8 @@ def validate(text: str, ctx: Context | None = None, **kw) -> list[Finding]:
         add("D3-speaker-numbering", "ERROR", f"speaker IDs start at S{sids[0]}, must start at S1")
     if sids and sids != list(range(1, len(sids) + 1)):
         add("D8-speaker-gap", "WARN", f"speaker IDs are not contiguous: {sids}")
-    for m in re.finditer(re.escape(VOICEOVER_PHRASE), desc):
+    voiceovers = re.finditer(re.escape(VOICEOVER_PHRASE), desc) if english_lexical_checks else ()
+    for m in voiceovers:
         tail = desc[m.end():m.end() + 400]
         if not LIPS_CLOSED.search(tail):
             add("D9-voiceover-no-lips-clause", "ERROR",

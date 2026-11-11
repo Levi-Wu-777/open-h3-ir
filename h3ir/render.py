@@ -313,33 +313,6 @@ def _fill_shot_body(shot, plan: Plan, opts: ProfileOptions, notes: list[str]) ->
     body = (shot.body or "").strip()
     cam = shot.camera.phrase(opts.camera_style) if shot.camera else ""
 
-    # Trimmed BEFORE any substitution. Running it afterwards deleted the canonical camera
-    # sentence the template had just guaranteed, because the model had placed {{CAM}} late in a
-    # long body and the tail went with the trim. Cutting while the placeholders are still tokens
-    # means a lost {{CAM}} falls into the "token missing, appended" path and self-heals.
-    # The template will ADD words after this point -- the canonical camera sentence and each
-    # dialogue line -- so the ceiling budgets for them. Otherwise the final body exceeds the
-    # number the trim was enforcing, which is the same "the budget does not mean anything" problem
-    # in a smaller coat.
-    added = (len(cam.split()) if cam else 0) + sum(
-        len(d.text.split()) + 8 for d in shot.dialogue)
-    ceiling = max(int(shot.word_target * 0.9), int(shot.word_target * 1.5) - added)
-    words = body.split()
-    if len(words) > ceiling:
-        sentences = re.split(r"(?<=[.!?])\s+", body)
-        kept, n = [], 0
-        for sent in sentences:
-            c = len(sent.split())
-            if kept and n + c > ceiling:
-                break
-            kept.append(sent)
-            n += c
-        if kept and n >= shot.word_target * 0.6:
-            notes.append(f"shot {shot.n}: trimmed {len(words) - n} words over the "
-                         f"{ceiling}-word ceiling at a sentence boundary")
-            body = " ".join(kept)
-
-
     if CAM_TOKEN in body:
         body = body.replace(CAM_TOKEN, cam + "." if cam and not cam.endswith(".") else cam)
     elif cam:
@@ -349,16 +322,6 @@ def _fill_shot_body(shot, plan: Plan, opts: ProfileOptions, notes: list[str]) ->
         if body and not body.endswith((".", "!", "?")):
             body += "."
         body = f"{body} {cam}." if body else f"{cam}."
-
-    # The prose stage is told to write nothing about camera movement, because the template owns
-    # it. When it does anyway, the shot ends up with the canonical sentence AND a paraphrase of
-    # it. Remove the paraphrase rather than shipping both: camera is a template decision, and a
-    # second opinion about it is exactly what the placeholder exists to prevent.
-    if cam:
-        body, dropped = _strip_extra_camera_prose(body, cam)
-        if dropped:
-            notes.append(f"shot {shot.n}: removed {dropped} redundant camera sentence(s) "
-                         "the prose stage added alongside the template's")
 
     # The label is the ONLY binding between this prose and the attached image. When the prose
     # stage describes a planned subject but omits its label, the shot silently stops referencing

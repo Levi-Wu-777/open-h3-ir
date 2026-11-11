@@ -266,33 +266,7 @@ BY_ID = {d.id: d for d in DIRECTORS}
 # strongest sentence in the ask would be a taste and the absolute one would trail it.
 
 def brief_instruction(d: Director, *, scored: bool = True) -> str:
-    """What the writer is told: one head, then the caller's own words verbatim.
-
-    Two sentences do the work the axes used to do, and they are the only two.
-
-    The first says the profile YIELDS. It stands directly under the licence block, which has already
-    named in computed terms which attributes the request took and which the references keep, so a
-    profile that talks about framing on a request that stated the framing is subordinate by
-    placement as well as by sentence.
-
-    The second says APPLY, DO NOT COPY, and it is measured rather than precautionary. Without it the
-    writer quoted the notes back into the description as though they were scene content -- "letting
-    the moment run past the point of comfort" is a note about how to CHOOSE and describes nothing
-    anyone can see or hear, which base-en.txt 4.1 rules out in as many words: "Every detail should
-    correspond to something visible or audible."
-
-    `scored` is false when the dial licenses no music. Then a third sentence says so, because a
-    profile describing music that cannot exist is a contradiction WE placed in the ask -- see the
-    module docstring. The caller's words are never edited; they are placed under an instruction that
-    outranks them.
-    """
-    head = ("Direction. This is the taste that fills whatever the request and the references leave "
-            "open, and it overrides neither of them. Apply it to this scene; do not copy these "
-            "sentences into it.")
-    if not scored:
-        head += (" This piece gets no music, so ignore anything below about music, because that "
-                 "decision is already made and the direction does not reopen it.")
-    return head + "\n" + (d.notes or "").strip()
+    return f"Direction requested by the caller: {d.name}\n{d.notes}"
 
 
 def note(d: Director | None) -> str:
@@ -311,21 +285,11 @@ def note(d: Director | None) -> str:
 # rides in the ask on every call and a pasted document would come back as an unactionable context
 # error from somebody's endpoint rather than as a sentence. The longest thing that ships is Cameron
 # at ~1600 characters, so this is roughly three of him.
-MAX_NOTES_CHARS = 5000
+MAX_NOTES_CHARS = None
 
 
 def check(d: Director) -> list[str]:
-    """Every reason this profile cannot be used, in the words the caller should read.
-
-    One rule, which is the whole list. A missing name is not on it: the name is what the REPORT
-    calls the profile, it changes no output, and refusing a paragraph somebody wrote over a blank
-    label would be a refusal for our own bookkeeping. `from_mapping` names an unnamed one instead.
-    """
-    n = len(d.notes or "")
-    if n > MAX_NOTES_CHARS:
-        return [f"the direction is {n} characters and the cap is {MAX_NOTES_CHARS}. All of it is "
-                "sent with every brief, so a long one crowds out the request itself. Say the habits "
-                "and cut the examples"]
+    """导演说明不施加作者自定的字符上限。"""
     return []
 
 

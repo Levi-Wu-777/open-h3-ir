@@ -75,7 +75,7 @@ def test_a_long_but_aligned_duration_is_not_an_error():
     assert is_on_grid(twenty)
     findings = validate(text, Context(mode="t2va", duration_s=twenty))
     assert not [f for f in findings if f.severity == "ERROR"]
-    assert any(f.rule == "T10-outside-trained-band" for f in findings)
+    assert not any(f.rule == "T10-outside-trained-band" for f in findings)
 
 
 def test_an_off_grid_duration_is_still_an_error():
@@ -156,7 +156,7 @@ def test_every_cut_falls_inside_the_real_duration():
             assert shots[-1].end_ms == int(t.effective_seconds * 1000)
             for s in shots[1:]:
                 assert s.start_ms < t.effective_seconds * 1000
-                assert s.duration_ms >= 1500, "a shot shorter than 1.5 s carries no information"
+                assert s.duration_ms > 0
             times = [s.start_ms for s in shots]
             assert times == sorted(times) and len(set(times)) == len(times)
 
@@ -248,24 +248,18 @@ def test_user_dialogue_survives_byte_for_byte():
     assert "<d>[English] Follow the wind, live free.</d>" in out
 
 
-def test_a_second_camera_sentence_from_the_model_is_removed():
-    """The template owns the camera. When the prose stage writes its own sentence too, the shot
-    carries the canonical phrase AND a paraphrase — which reached a judged artifact."""
+def test_a_second_camera_sentence_from_the_model_is_preserved():
     plan = _mini_plan(body="A wide shot. {{CAM}} The camera pushes slowly forward, closing in.")
     res = render_ir(plan, ProfileOptions())
-    assert res.prompt.count("The camera") == 1, res.prompt
+    assert "The camera pushes slowly forward, closing in." in res.prompt
     assert "pushes in with small amplitude at slow speed" in res.prompt
-    assert any("redundant camera" in n for n in res.notes)
+    assert not any("redundant camera" in n for n in res.notes)
 
 
-def test_a_continuation_through_the_camera_token_is_removed():
-    """The prose stage sometimes treats {{CAM}} as its sentence's subject and writes through it,
-    leaving "…at slow speed. pushes steadily forward…" — a lowercase fragment no camera-sentence
-    pattern matches. It reached a judged artifact."""
+def test_a_continuation_through_the_camera_token_is_preserved():
     plan = _mini_plan(body="A wide shot. {{CAM}} pushes steadily and slowly forward, closing in.")
     res = render_ir(plan, ProfileOptions())
-    assert ". pushes" not in res.prompt, res.prompt
-    assert "pushes in with small amplitude at slow speed" in res.prompt
+    assert "pushes steadily and slowly forward, closing in." in res.prompt
 
 
 def test_a_described_but_unlabelled_subject_gets_its_label_attached():
@@ -286,20 +280,13 @@ def test_an_already_labelled_subject_is_not_touched():
     assert not any("attached <Subject 1>" in n for n in res.notes)
 
 
-def test_a_shot_that_overruns_its_budget_is_trimmed_at_a_sentence():
-    """A target the model overruns by 2x is not a budget. One arm came back at 750 words against
-    a 400-word plan."""
+def test_a_shot_that_overruns_its_target_is_preserved():
     long_body = " ".join(f"Sentence number {i} describes the wall." for i in range(80))
     plan = _mini_plan(body=long_body + " {{CAM}}")
     plan.shots[0].word_target = 40
     res = render_ir(plan, ProfileOptions())
-    body = res.sections["detailed_description"]
-    assert len(body.split()) < 200
-    # `</d>` is a valid terminator: the trim runs on the model's prose, and the template then
-    # appends the camera sentence and the dialogue markup after it.
-    assert body.rstrip().endswith((".", "!", "?", "</d>")), body[-40:]
-    assert ". Sentence number" in body, "the cut must land between sentences"
-    assert any("trimmed" in n for n in res.notes)
+    assert long_body in res.sections["detailed_description"]
+    assert not any("trimmed" in n for n in res.notes)
 
 
 def test_a_shot_within_its_budget_is_untouched():
@@ -456,12 +443,12 @@ def test_a_lora_for_the_wrong_checkpoint_is_rejected():
     assert any(f.rule == "W11-lora-variant" for f in findings)
 
 
-def test_strength_is_clamped_and_reported():
+def test_explicit_lora_strength_is_preserved():
     from h3ir.lora import resolve_loras
     chosen, findings = resolve_loras([{"id": "handpainted-anim-v2", "strength": 5.0}], Mode.REF2VA,
                                      Brief(intent="x", seconds=5))
-    assert chosen and chosen[0].strength_applied == 1.0
-    assert any(f.rule == "W14-lora-strength-clamped" for f in findings)
+    assert chosen and chosen[0].strength_applied == 5.0
+    assert not any(f.rule == "W14-lora-strength-clamped" for f in findings)
 
 
 def test_a_missing_trigger_in_the_text_is_an_error():

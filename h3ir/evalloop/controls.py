@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..config import get_config
+from ..policies import enabled
 from ..validate import Context, Report, validate
 
 OFFICIAL = "official_ref2va_example.txt"
@@ -130,7 +131,7 @@ def _mut_label_not_closed(t: str) -> str:
 
 MUTANTS: list[tuple[str, callable, str]] = [
     ("redundant <Picture N> source line", _mut_redundant_source, "L5-redundant-source-line"),
-    ("<Subject N>: colon form", _mut_colon_subject, "L2-undefined-subject"),
+    ("undefined <Subject N>", lambda text: text.replace("<Subject 2> is", "<Subject 9> is", 1), "L2-undefined-subject"),
     ("missing (appears in [Shot N])", _mut_missing_appears_in, "R3-missing-appears-in"),
     ("<Image N> instead of <Picture N>", _mut_wrong_label_namespace, "L1-unknown-label"),
     ("timestamp on [Shot 1]", _mut_shot1_timestamp, "T2-shot1-timestamp"),
@@ -154,27 +155,14 @@ def run_controls(verbose: bool = False) -> tuple[bool, list[ControlResult]]:
     results: list[ControlResult] = []
     official = load(OFFICIAL)
 
-    # ONE documented exception, authorised deliberately rather than discovered.
-    # P5 (no motion type from the closed vocabulary) is now an ERROR, and MiniMax's own example
-    # trips it. That is intended: their example is a single static shot of a seated conversation,
-    # where an unstated camera costs nothing, while our briefs are motion and the owner's own
-    # reference material says H3 drifts and reframes when the camera is unspecified. Three of our
-    # generations had no motion type and every validator passed them.
-    # The example must still be clean on EVERYTHING ELSE, which is what this asserts.
-    OFFICIAL_EXPECTED = {"P5-camera-no-motion-type"}
     findings = validate(official, OFFICIAL_CTX)
-    errs = [f for f in findings if f.severity == "ERROR" and f.rule not in OFFICIAL_EXPECTED]
-    warns = [f for f in findings if f.severity == "WARN" and f.rule not in OFFICIAL_EXPECTED]
-    ok = not errs and not warns
+    faults = [f for f in findings if f.severity in ("ERROR", "WARN")]
+    results.append(ControlResult("MUST PASS: MiniMax official Ref2VA example", not faults,
+                                 "; ".join(str(f) for f in faults)))
     results.append(ControlResult(
-        "MUST PASS: MiniMax official Ref2VA example (P5 exempt, see note)", ok,
-        "clean apart from the documented P5 exception"
-        if ok else "; ".join(str(x) for x in errs + warns)))
-    fired = {f.rule for f in findings}
-    results.append(ControlResult(
-        "EXPECTED: the official example lacks a motion type", "P5-camera-no-motion-type" in fired,
-        "P5 fired as documented" if "P5-camera-no-motion-type" in fired
-        else "P5 did not fire — the rule may be matching ordinary prose again"))
+        "MUST PASS: no mandatory camera-motion heuristic",
+        "P5-camera-no-motion-type" not in {f.rule for f in findings},
+        "the author heuristic is disabled"))
 
     for name, mutate, expect in MUTANTS:
         text = mutate(official)
@@ -183,9 +171,9 @@ def run_controls(verbose: bool = False) -> tuple[bool, list[ControlResult]]:
                                          "mutation did not apply — the control is stale"))
             continue
         rules = {f.rule for f in validate(text, OFFICIAL_CTX) if f.severity == "ERROR"}
-        hit = expect in rules
+        hit = expect in rules if enabled(expect) else not rules
         results.append(ControlResult(
-            f"MUST FAIL: {name}", hit,
+            f"{'MUST FAIL' if enabled(expect) else 'MUST PASS'}: {name}", hit,
             f"{expect} fired" if hit else f"expected {expect}, got {sorted(rules) or 'nothing'}"))
 
     # The arm a human rejected on taste, assembled from its emitted sentences (the acceptance

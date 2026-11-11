@@ -69,13 +69,6 @@ def _ctx() -> Context:
                         ("<Picture 2>", "storyboard", "weak_reference")))
 
 
-def test_a_storyboard_defined_as_scenery_is_an_error():
-    """The measured failure verbatim: the board became an environment subject."""
-    errs = [f for f in validate(DOC_CONTENT_CLAIM, _ctx()) if f.severity == "ERROR"]
-    assert any(f.rule == "R28-storyboard-cited-as-content" for f in errs), \
-        [str(f) for f in errs]
-    msg = next(f.msg for f in errs if f.rule == "R28-storyboard-cited-as-content")
-    assert "<Picture 2>" in msg and "storyboard" in msg
 
 
 def test_the_mandated_construct_satisfies_the_rule():

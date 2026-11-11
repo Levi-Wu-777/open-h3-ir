@@ -106,47 +106,13 @@ tell apart from three stills — closer is closer, whether it was a dolly or a z
 do not settle it, write exactly "unknown". That is a useful answer here and a guess is not.
 """
 
-IMAGE_INSTRUCTIONS = """You catalogue a reference image for a video-generation pipeline.
-
-Record only what is actually visible. Never guess a name, a brand, a place or a backstory.
-
-For each distinct person, animal or object that could be reused in a video, give a descriptor
-("the young man", "the black lamb") and then split what you see into TWO separate lists. The
-split matters more than the detail:
-
-`attributes` — IDENTITY. What is true of this subject in any photograph of them: hair, beard,
-build, age, garment by type and colour, accessories, markings, material, wear. These are the
-things a generator needs in order to redraw them recognisably. Aim for five to eight.
-
-`pose` — TRANSIENT. What is true only of THIS photograph: stance, what they are doing with their
-hands or limbs, gesture, facial expression, gaze direction, where they sit in the frame, the
-camera angle. "Arms crossed", "hands in pockets", "seen from a low angle" belong here and NEVER
-in attributes.
-
-OBSERVE, NEVER INTERPRET. Write only what is literally visible and never what it means. "Hands
-loosely closed at his sides" is an observation. "Fists clenched in a fighting stance" is a
-narrative inference about intent, and it is wrong: it turned a walking posture into combat and
-filed it under identity, so the character then arrived in a corridor braced to fight. Never name
-a stance ("fighting stance", "heroic pose", "power stance"), never name an emotion or intent
-("determined", "menacing", "confident", "ready to strike"), never say what someone is about to
-do. If you cannot see it, it is not there.
-
-REFERENCE SHEETS. If the image is a character sheet, turnaround, model sheet or contact sheet --
-one subject repeated across several panels, usually with labels and a plain studio backdrop --
-then set `is_reference_sheet` true and describe **ONE** subject. Eight views of one man is one
-man. The grid, the panel borders, any text burned into the image (FRONT, LEFT PROFILE, BACK) and
-the studio backdrop are properties of the SHEET, not of the character: never put them in
-`attributes`, `environment`, `visible_text` or anywhere else. Use the multiple views to describe
-the character more completely -- hair from the back, the shoe from the side -- which is what the
-sheet is for.
-
-`composition`: "bare_plate" if the subject sits alone against a plain or empty background;
-"composed_scene" if it is already staged as a finished frame with a full setting.
-
-`visible_text`: every legible string, exactly as written, in its original language.
-
-Describe the environment, the lighting, the framing and the visual style separately from the
-subjects. Return JSON only."""
+IMAGE_INSTRUCTIONS = """Describe the supplied reference image as JSON using the requested schema.
+Record the visible subjects, their appearance and current pose, environment, lighting, palette,
+framing, style, composition and every legible text string in its original language. Do not invent
+facts unavailable from the image. Mark a reference sheet as such, while retaining its background,
+labels and layout as observations; the caller decides which parts to use. No attribute-count quota
+or blacklist of poses, expressions, background details or visible text is imposed.
+"""
 
 # There is no audio schema and no audio model call, deliberately. See analyse_audio.
 def _cache_path(key: str) -> Path:
@@ -203,12 +169,12 @@ def analyse_image(backend: Backend, ref: AssetRef, *, seed: int | None = None) -
         sha256=ref.sha256, kind=AssetKind.IMAGE,
         summary=obj.get("summary", ""),
         subjects=obj.get("subjects") or [],
-        environment=("" if obj.get("is_reference_sheet") else obj.get("environment", "")),
+        environment=obj.get("environment", ""),
         lighting=obj.get("lighting", ""),
         palette=obj.get("palette") or [],
         framing=obj.get("framing", ""),
         style=obj.get("style", ""),
-        visible_text=([] if obj.get("is_reference_sheet") else (obj.get("visible_text") or [])),
+        visible_text=obj.get("visible_text") or [],
         composition=(ref.composition if ref.composition != "unknown"
                      else obj.get("composition", "unknown")),
         is_reference_sheet=bool(obj.get("is_reference_sheet")),

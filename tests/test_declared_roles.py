@@ -336,9 +336,11 @@ def test_the_writer_is_told_what_the_video_role_settles():
                   video_roles=tuple((m.label, m.role.value) for m in plan.manifest
                                     if m.kind is AssetKind.VIDEO))
     ask = backend.asks[0]
-    assert "<Video 1>" in ask and "video editing" in ask
-    assert "The target video is an edited version of <Video 1>." in ask
-    assert "however the request is phrased" in ask
+    import json
+    facts = json.loads(ask.split("\n\n", 1)[1])
+    assert facts["video_roles"] == [["<Video 1>", "edit_source"]]
+    assert facts["asset_requests"][0]["role_stated"] is True
+    assert facts["request"] == brief.intent
 
 
 def test_the_ask_says_nothing_when_no_video_is_attached():

@@ -235,7 +235,7 @@ class Scope:
     @property
     def licensed(self) -> frozenset[str]:
         """Additions permitted here. A prohibition removes the licence at every position."""
-        return frozenset(_LICENCE[self.level] - self.forbidden)
+        return frozenset(set(ELEMENTS) - self.forbidden)
 
     def permits(self, element: str) -> bool:
         return element not in self.forbidden and (
@@ -259,97 +259,13 @@ class Scope:
         return "; ".join(bits)
 
     def brief_instruction(self) -> str:
-        """What the writer is told. States the licence positively and the prohibitions absolutely.
-
-        The addable list is GENERATED from the licence, never hardcoded per position. An earlier
-        version wrote bold's latitude as fixed prose and then appended the prohibitions underneath,
-        so a request that forbade music produced "you may add music" followed by "music is ruled
-        out" — a contradiction we authored, which the model would spend a fix round on.
-
-        Written as latitude rather than as a quota: naming a number of shots or camera moves here
-        would be the same mistake as putting shot count in the validator.
-        """
-        addable = [_PHRASE[e] for e in ELEMENTS if e in self.licensed]
-        head = {
-            Creativity.RESTRAINED:
-                "Creativity: RESTRAINED. Render what the request describes and nothing beyond it. "
-                "Every shot, every move and every sound must trace to something the request states "
-                "or something the format requires. This is not permission to write less carefully — "
-                "the same care, aimed only at what was asked.",
-            Creativity.BALANCED:
-                "Creativity: BALANCED. Render what the request describes, and shape how it is seen "
-                "and heard — the framing, the camera, where a cut serves it, the performance, the "
-                "ambience. Do not invent events the request does not contain.",
-            Creativity.BOLD:
-                "Creativity: BOLD. The request is the seed, not the ceiling. You may escalate — a "
-                "performance beat, a turn, a moment the request never mentioned — as long as it "
-                "serves what was asked and never contradicts it.\n"
-                "  · Camera: if a nudge would carry the shot, take it. `with large amplitude` and "
-                "`at fast speed` are the words for it, and the guide omits amplitude and speed to "
-                "mean medium and normal — so the middle is what silence buys. Where a request is "
-                "genuinely quiet, a quiet camera is the right answer and nothing here overrides that.",
-            Creativity.EXTREME:
-                "Creativity: EXTREME. Every decision goes to the far end of what the format "
-                "supports — not one notch up from the middle, the boldest value available.\n"
-                "  · Camera: `with large amplitude` and `at fast speed`, stated explicitly, and "
-                "`with small amplitude` / `at slow speed` appear NOWHERE. The guide omits amplitude "
-                "and speed to mean medium and normal, so leaving them out plays the shot at the "
-                "middle — the opposite of this setting. Take the most assertive motion type the shot "
-                "supports, and the most extreme angle.\n"
-                "  · Framing: the far end of what the shot allows — an extreme close-up rather than "
-                "a close-up, a wide that is genuinely wide.\n"
-                "  · Light and contrast: hard falloff over even, deep shadow over lifted.\n"
-                "  · Performance: a beat that fully completes. A hold that actually holds.\n"
-                "This is magnitude, not invention. You are playing the requested scene as hard as "
-                "the format allows — not adding events, figures, or facts about the material that "
-                "the request and the references do not contain.",
-        }[self.level]
-        out = [head]
-        if addable:
-            out.append("Beyond the request you may add: " + ", ".join(addable) + ".")
-        else:
-            out.append("Add none of these unless the request supplies it: "
-                       + ", ".join(_PHRASE[e] for e in ELEMENTS) + ".")
-        if self.forbidden:
-            out.append("The request explicitly rules these out, and no setting overrides that: "
-                       + ", ".join(sorted(self.forbidden)) + ".")
-        return "\n".join(out)
+        return (f"Caller creativity preference: {self.level.value}. "
+                "Follow the caller's actual request and constraints; this preference imposes "
+                "no additional content permissions, camera quotas or forbidden elements.")
 
 
 def build(intent: str, *, level: str | Creativity | None = None,
           constraints: tuple[str, ...] | list[str] = (),
           has_dialogue: bool = False, has_onscreen_text: bool = False,
-          dialogue_texts: tuple[str, ...] = (),
-          silent: bool = False) -> Scope:
-    """Read the scope off the request once.
-
-    Precedence, and the order matters:
-      1. A prohibition beats a mention of the same word — "no background music" says *music*, and
-         reading that as a request for music inverts the instruction.
-      2. Content the caller actually supplied beats a prohibition — filling in a dialogue line and
-         also writing "no dialogue" is a contradiction, and the concrete lines are the better
-         evidence of intent than a phrase that may be stale in a long request.
-
-    `silent` is the caller's structured no-music flag and is treated exactly like the phrase in the
-    request, so the flag and the prose cannot disagree.
-    """
-    texts = (intent, *constraints)
-    forbidden = set(prohibitions(*texts))
-    if silent:
-        forbidden.add(SCORE)
-    supplied = {el for el, present in ((SPEECH, has_dialogue),
-                                       (ONSCREEN_TEXT, has_onscreen_text)) if present}
-    # A quoted span in the request is the caller supplying the words themselves — the strongest
-    # form of a request. Spans that are the caller's dialogue lines are speech (carried by
-    # `has_dialogue`); whatever quoted material remains is lettering the caller wants in frame.
-    # Measured (2026-08-15): four tray briefs died on their own Q2 because the sentence's quotes —
-    # the node's documented mechanism for both channels — licensed neither.
-    spoken = {" ".join(d.split()) for d in dialogue_texts}
-    lettering = [q for t in texts for q in re.findall(r'"([^"]+)"', t)
-                 if " ".join(q.split()) not in spoken]
-    if lettering:
-        supplied.add(ONSCREEN_TEXT)
-    mentioned = set(mentions(*texts)) - forbidden
-    forbidden -= supplied
-    return Scope(level=parse(level), requested=frozenset(supplied | mentioned),
-                 forbidden=frozenset(forbidden))
+          dialogue_texts: tuple[str, ...] = (), silent: bool = False) -> Scope:
+    return Scope(level=parse(level), forbidden=frozenset({SCORE}) if silent else frozenset())

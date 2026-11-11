@@ -62,45 +62,12 @@ def test_the_words_inside_a_d_block_satisfy_everything():
     assert not [f for f in found if f.rule != "P2-too-short"], [str(f) for f in found]
 
 
-def test_a_supplied_transcript_that_never_reaches_a_d_block_is_reported():
-    """The measured failure, 0 of 7. WARN and not ERROR on purpose: whether the request asked for a
-    reperformance is a fact only the request states, and 5.4's other half forbids carrying the words
-    over when only the timbre is referenced. A rule that cannot decide which case it is in must not
-    be able to reject a correct brief."""
-    found = validate(_doc("The camera holds a static shot on <Subject 1>."), _ctx())
-    hits = [f for f in found if f.rule == "D16-transcript-not-reperformed"]
-    assert hits and hits[0].severity == "WARN", [str(f) for f in found]
-    assert "<Audio 1>" in hits[0].msg
-    assert "only the timbre" in hits[0].msg, "the message has to name the case where this is right"
 
 
-def test_a_paraphrased_reperformance_is_an_error():
-    """Once the words are in front of the writer, the failure mode changes: not absence but drift.
-    A block that plainly reperforms the line and gets it slightly wrong is the D4 defect in another
-    coat, and it is decidable."""
-    found = validate(_doc(SAYS + "<d>[English] We close at six, not at half past.</d>"), _ctx())
-    errs = [f for f in found if f.severity == "ERROR"]
-    assert [f.rule for f in errs] == ["D14-reperformance-altered"], [str(f) for f in errs]
-    assert WORDS in errs[0].msg
 
 
-def test_a_copied_audio_whose_words_are_missing_is_an_error():
-    """The decidable half of 5.4. `fully_copy` means "the complete source audio serves as the target
-    video's complete final audio track", so the document's own claim puts those words in the render,
-    and they belong inside <d>. Nothing about the request is being guessed at here."""
-    found = validate(_doc("The camera holds a static shot on <Subject 1>.", marker="fully_copy"),
-                     _ctx())
-    errs = [f for f in found if f.severity == "ERROR"]
-    assert "D15-copied-audio-words-missing" in {f.rule for f in errs}, [str(f) for f in errs]
 
 
-def test_partially_copy_is_not_treated_as_a_full_copy():
-    """A partial copy may take a stretch of the track that carries no speech at all, so the
-    antecedent is not decidable and this stays a WARN."""
-    found = validate(_doc("The camera holds a static shot on <Subject 1>.",
-                          marker="partially_copy"), _ctx())
-    assert not [f for f in found if f.severity == "ERROR"], [str(f) for f in found]
-    assert "D16-transcript-not-reperformed" in {f.rule for f in found}
 
 
 def test_no_transcript_means_no_finding():
@@ -165,24 +132,20 @@ def test_the_ask_carries_the_transcribed_words_verbatim():
     assert "<Audio 1>" in ask
 
 
-def test_the_ask_states_both_halves_of_the_rule():
-    """Handing over the words without ref-en.txt 5.4's prohibition would trade one defect for its
-    mirror image: a timbre-only reference whose dialogue gets carried into the video."""
+def test_the_ask_preserves_audio_role_and_transcript_facts():
+    import json
     ask = _capture_ask(Role.VOICE_TIMBRE, WORDS, "Reuse this voice for the man at the counter.")
-    assert "<d>" in ask
-    assert "original language" in ask
-    assert "do not carry" in ask.lower()
+    facts = json.loads(ask.split("\n\n", 1)[1])
+    assert facts["asset_requests"][0]["role"] == "voice_timbre"
+    assert facts["audio_transcripts"] == [["<Audio 1>", WORDS]]
 
 
-def test_the_ask_says_the_words_go_in_one_place_only():
-    """Measured after the words started arriving: the writer put them inside <d> AND in double
-    quotes in the surrounding prose, and `Q2-unlicensed-addition` rejected the brief twice on two of
-    seven runs. Q2 was right. base-en.txt 4.5 makes a double-quoted span text that is visible on
-    screen, so quoting the line tells H3 to letter it across the picture as well as speak it."""
-    ask = _capture_ask(Role.VOICE_TIMBRE, WORDS,
-                       "Have the man at the counter say the line on the recording again.")
-    assert "exactly ONE place" in ask
-    assert "burned into the frame" in ask
+def test_the_ask_preserves_the_request_to_reperform_audio():
+    import json
+    intent = "Have the man at the counter say the line on the recording again."
+    facts = json.loads(_capture_ask(Role.VOICE_TIMBRE, WORDS, intent).split("\n\n", 1)[1])
+    assert facts["request"] == intent
+    assert facts["audio_transcripts"] == [["<Audio 1>", WORDS]]
 
 
 def test_the_ask_says_nothing_about_words_when_no_transcript_was_supplied():

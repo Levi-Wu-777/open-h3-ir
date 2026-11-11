@@ -26,6 +26,8 @@ itself publishes rather than against the one endpoint this was built on. See `he
 """
 from __future__ import annotations
 
+from urllib.parse import urlsplit
+
 import base64
 import json
 import logging
@@ -42,7 +44,7 @@ from typing import Any
 
 import httpx
 
-from .config import get_config
+from .config import DEEPSEEK_BASE_URL, get_config
 
 log = logging.getLogger("h3ir.backend")
 
@@ -345,6 +347,8 @@ class Backend:
         Ollama answers `/api/version`, and both return `{"version": ...}`. Provenance that reads
         `?` on every run is provenance nobody can use.
         """
+        if urlsplit(self.base_url()).hostname == urlsplit(DEEPSEEK_BASE_URL).hostname:
+            return "DeepSeek API"
         for url in (f"{self._root_url()}/version", f"{self._root_url()}/api/version"):
             try:
                 v = self._get(url, 5.0).json().get("version")
@@ -375,7 +379,8 @@ class Backend:
             thinking = self.cfg.default_thinking
         # F16: a schema is only honoured with thinking off. Refuse the unsafe combination
         # rather than returning prose that looks like a schema failure nobody notices.
-        if response_format is not None and thinking:
+        is_deepseek = urlsplit(self.base_url()).hostname == urlsplit(DEEPSEEK_BASE_URL).hostname
+        if response_format is not None and thinking and not is_deepseek:
             raise BackendError(
                 "structured output requires thinking=False on this endpoint "
                 "(json_schema is silently not applied while reasoning is enabled)")
@@ -386,14 +391,15 @@ class Backend:
             "max_tokens": max_tokens or self.cfg.max_tokens,
             "temperature": temperature,
         }
-        if seed is not None:
+        if seed is not None and not is_deepseek:
             body["seed"] = seed
         if stop:
             body["stop"] = stop
         if response_format is not None:
             body["response_format"] = response_format
-        if not thinking:
-            # The ONLY spelling that works. {"thinking": False} is silently ignored.
+        if is_deepseek:
+            body["thinking"] = {"type": "enabled" if thinking else "disabled"}
+        elif not thinking:
             body["chat_template_kwargs"] = {"enable_thinking": False}
 
         last: Exception | None = None

@@ -27,7 +27,7 @@ from .backend import Backend, user_message
 from .config import get_config
 from . import director as _director
 from .creativity import ELEMENTS
-from .models import AMPLITUDES, AssetCard, Brief, CAMERA_TYPES, Mode, SPEEDS, ShotPlan, SubjectPlan
+from .models import AssetCard, Brief, Mode, ShotPlan, SubjectPlan
 from .textnorm import normalize
 
 
@@ -37,6 +37,35 @@ def load_prompt(name: str) -> str:
     if not p.exists():
         raise FileNotFoundError(f"prompt file not found: {p}")
     return p.read_text(encoding="utf-8").strip()
+
+
+def _language_instruction(language: str) -> str:
+    selected = language.strip() or "English"
+    target = ("Follow the language of the caller's original request for all generated prose"
+              if selected.casefold() == "auto"
+              else f"Write all generated prose in {json.dumps(selected, ensure_ascii=False)}")
+    return (
+        "\n\nCALLER'S OUTPUT LANGUAGE (takes precedence over guide instructions to write English): "
+        + target + ", including descriptions, summary, subject and retention explanations, "
+        "soundscape, music and voice descriptions. Keep H3 section keys, labels, enum values, "
+        "[Shot N], At MM:SS.mmm, <d>, <scenetrans>, placeholders and all other structural tokens "
+        "unchanged. For every cut after [Shot 1], begin the shot with [Shot N] At MM:SS.mmm, "
+        "then continue the prose in the requested language. The capitalized ASCII token At is "
+        "mandatory syntax: never translate it to 在 or another word. For example, Chinese prose "
+        "uses '[Shot 2] At 00:00.700, 镜头切到近景。', never '[Shot 2] 在 00:00.700，镜头切到近景。'. "
+        "The example time is illustrative; keep the actual cut times. [Shot 1] has no timestamp. "
+        "This timeline form applies to complete prompt documents, not JSON planning or a "
+        "prose-only shot body. "
+        "For video editing, keep the mandated English opening immediately after the task-type "
+        "prefix: 'The target video is an edited version of <Video N>.' Use the actual source "
+        "video label, then describe the edit in the requested language; never omit the source. "
+        "For voiceover, preserve the exact phrase 'says in an off-screen voiceover', and state "
+        "that the on-screen character's lips remain closed after every voiceover block. "
+        "For speech crossing a cut, retain both <scenetrans> markers and explicitly describe "
+        "the uninterrupted audio in the requested language. "
+        "Preserve caller-supplied dialogue and on-screen text verbatim in their "
+        "original language; do not translate them to the output language."
+    )
 
 
 def beat_schema(n_shots: int) -> dict[str, Any]:
@@ -61,9 +90,9 @@ def beat_schema(n_shots: int) -> dict[str, Any]:
                             "additionalProperties": False,
                             "required": ["type"],
                             "properties": {
-                                "type": {"type": "string", "enum": list(CAMERA_TYPES)},
-                                "amplitude": {"type": "string", "enum": list(AMPLITUDES)},
-                                "speed": {"type": "string", "enum": list(SPEEDS)},
+                                "type": {"type": "string"},
+                                "amplitude": {"type": "string"},
+                                "speed": {"type": "string"},
                             },
                         },
                         "subjects": {"type": "array", "items": {"type": "string"}},
@@ -71,7 +100,7 @@ def beat_schema(n_shots: int) -> dict[str, Any]:
                     },
                 },
             },
-            "ambient_sound": {"type": "array", "items": {"type": "string"}, "maxItems": 3},
+            "ambient_sound": {"type": "array", "items": {"type": "string"}},
             "style_phrase": {"type": "string"},
             "summary": {"type": "string"},
             "music": {"type": "string"},
@@ -97,6 +126,7 @@ def _asset_digest(cards: dict[str, AssetCard], subjects: list[SubjectPlan]) -> s
 
 def fix_with_findings(backend: Backend, written: str, findings: list, *,
                       labels: tuple[str, ...] = (), sections: tuple[str, ...] = (),
+                      prompt_language: str = "English",
                       seed: int | None = None, thinking: bool = False) -> str:
     """Hand the model its own text plus the findings and ask for a surgical fix.
 
@@ -119,29 +149,21 @@ def fix_with_findings(backend: Backend, written: str, findings: list, *,
     rather than a decision.
     """
     numbered = "\n".join(f"{i}. [{f.rule}] {f.msg}" for i, f in enumerate(findings, 1))
-    inventory = ""
-    if labels:
-        inventory = (
-            "\nThese are the ONLY labels that exist for this request. Every one of them is real and "
-            "no others are — a label outside this list references nothing at all, so the fix for an "
-            "unknown label is to remove it or replace it with one of these, never to define it:\n"
-            + ", ".join(labels) + "\n")
+    media_labels = [label for label in labels if not label.startswith("<Subject")]
     ask = (
-        "Your brief failed mechanical verification. Below are the exact findings, then your text.\n\n"
+        "Correct the following official-format or explicit-caller-constraint findings. "
+        "Preserve the caller's intent; adjust shots or wording when the correction requires it. "
+        "Return the complete corrected prompt and nothing else.\n\n"
         f"FINDINGS\n{numbered}\n"
-        f"{inventory}\n"
-        "Fix every finding and change nothing else. "
-        + ("" if any(f.rule == "T11-shot-count-pinned" for f in findings) else "Keep your shots, ")
-        + "Keep your camera moves, your "
-        "performance beats, your wording. Do not rewrite, do not shorten, do not re-plan — this is "
-        "a correction pass, not a second draft. Output the corrected "
-        + (f"{len(sections)} sections ({', '.join(sections)})" if sections else "brief in full")
-        + " and nothing else.\n\n"
-        f"YOUR TEXT\n{written}"
-    )
+        f"Attached media labels: {', '.join(media_labels)}. "
+        "Subject labels may be defined consistently from these references.\n"
+        + (f"Required {len(sections)} sections: {', '.join(sections)}.\n" if sections else "")
+        + "\n"
+        f"YOUR TEXT\n{written}")
     reply = backend.chat(
         [{"role": "system", "content": "You correct mechanical faults in your own H3 brief. You "
-                                       "make the smallest edit that satisfies each finding."},
+                                       "make the smallest edit that satisfies each finding."
+                                       + _language_instruction(prompt_language)},
          {"role": "user", "content": ask}],
         thinking=thinking, temperature=0.2, seed=seed, max_tokens=20000)
     return reply.content
@@ -710,158 +732,42 @@ def compose_brief(backend: Backend, brief: Brief, subjects: list[SubjectPlan],
                   # so this module never has to join a manifest label to a card hash.
                   video_worlds: tuple[tuple[str, str, str], ...] = (),
                   taken_over: tuple[tuple[str, str], ...] = (),
-                  generation_task: bool = True,
+                  generation_task: bool = True, manifest=(),
                   omit: tuple[str, ...] = ()) -> str:
-    """One call. The model writes all six sections and decides everything creative in them.
-
-    The facts are handed over and the craft is not. Labels, duration and dialogue are stated as
-    givens; cuts, camera, performance and the sound shape are the model's. Shot count is the
-    model's exactly while `shots` is unset: an explicit count is the caller's contract, stated in
-    the ask and enforced by T11-shot-count-pinned.
-    """
-    # `None` keeps the six-section shape, which is what every caller predating the split passes.
-    is_ref = mode is None or mode is Mode.REF2VA
-    if not is_ref:
-        label_facts = base_mode_label_facts(subjects, labels, picture_roles) if labels else ""
-    else:
-        # Handed over as the definition LINES, in the exact form the spec wants. An earlier version
-        # listed them as "LABEL = description" and the model copied that shape straight into
-        # subject_definitions, which then failed the "<Subject N> is ..." rule. A fact sheet that
-        # looks like output gets used as output.
-        label_facts = "\n".join(_definition_lines(subjects, cards, labels))
-        if label_facts and len({s for x in subjects for s in x.sources}) > 1:
-            label_facts += "\n" + MERGE_SUBJECTS
-        # Every label in the wiring, not only the subject ones. `_definition_lines` walks `subjects`,
-        # so an <Audio N> or a bare <Video N> was never named in the ask at all -- and a model cannot
-        # bind a label it was not told exists. A video-plus-audio brief came back with the audio
-        # referenced nowhere, which is an asset the app would wire in against text that never
-        # mentions it.
-        board_facts = storyboard_facts(picture_roles)
-        if board_facts:
-            label_facts += ("\n" if label_facts else "") + board_facts
-        look_facts = style_facts(picture_roles)
-        if look_facts:
-            label_facts += ("\n" if label_facts else "") + look_facts
-        shape_facts = structure_facts(video_roles)
-        if shape_facts:
-            label_facts += ("\n" if label_facts else "") + shape_facts
-        unnamed = [lb for lb in labels if lb not in label_facts]
-        if unnamed:
-            label_facts += ("\n" if label_facts else "") + (
-                "Also attached and NOT yet described above: " + ", ".join(unnamed) + ". Every one of these "
-                "is wired into the render and must be referenced in the brief — define what it is, and "
-                "give it a retention line. An attached reference the text never mentions is dead weight "
-                "the model still pays for.\n"
-                "For any <Audio N> in that list: you have NOT heard it and cannot describe what it "
-                "contains. Say only what its note above states, and never claim it came from a <Video N> "
-                "— the wiring decides that and you have not been told it.")
-        if any(lb.startswith("<Picture") for lb in labels):
-            label_facts += ("\n" if label_facts else "") + reference_picture_facts()
-        else:
-            # The case nobody was told about, and it produced the sharpest fabrication in the corpus:
-            # on an audio-only brief the writer wrote "anchored by <Audio 1> as the opening frame" and
-            # claimed `keyframe completion` with no image attached anywhere. The picture statement was
-            # emitted only when a <Picture N> existed, so a brief with no pictures at all was left to
-            # infer from the specification in its system prompt, which teaches the construct.
-            label_facts += ("\n" if label_facts else "") + NO_PICTURES_AT_ALL
-    dlg = "\n".join(f'- "{d.text}" ({d.language})'
-                      + (f", spoken by {d.speaker_hint}" if d.speaker_hint else "")
-                      + (" as an off-screen voiceover" if d.voiceover else "")
-                      for d in brief.dialogue) or "none — the video has no dialogue"
-
-    ask = (
-        f"Request: {brief.intent}\n\n"
-        f"Duration is exactly {target.effective_seconds:.3f} seconds; every cut time strictly less "
-        f"than {int(target.effective_seconds // 60):02d}:"
-        f"{target.effective_seconds % 60:06.3f}, written MM:SS.mmm.\n\n"
-        # Three cases, and the middle one used to be told the wrong thing. A base mode with an
-        # image attached has a real <Picture 1> and no definition lines at all, so keying the message
-        # off the definition lines announced "nothing is attached" over a live reference.
-        + (("Facts you must honour — these are the definition lines, use or reword them:\n"
-            if is_ref else "Facts you must honour — what each attached picture is:\n")
-           + f"{label_facts}\n\n" if label_facts.strip() else
-           (f"The only labels that exist for this request are {', '.join(labels)}, and they carry no "
-            "separate definitions. Everything else — people, objects, the place — is named in plain "
-            "prose, the same way every time it appears.\n\n" if labels else
-            "There are NO labels for this request: nothing is attached, so no `<Subject N>`, "
-            "`<Picture N>`, `<Video N>` or `<Audio N>` exists. Name people and objects in plain "
-            "prose and name them the same way every time.\n\n"))
-        +
-        f"Dialogue:\n{dlg}\n"
-        + (f"\n{DIALOGUE_PLACEMENT}\n" if brief.dialogue else "")
-        + (f"\n{reference_audio_words(audio_transcripts)}\n" if audio_transcripts else "")
-        # Scoped to the full-reference shape: a base mode has no task-type prefix to constrain, and
-        # cannot have an <Audio N> at all -- any audio attachment routes to ref2va (mode.py 12.2#1).
-        + (f"\n{audio_task_facts(labels, task_types, audio_roles)}\n" if is_ref else "")
-        + (f"\n{video_task_facts(video_roles, task_types)}\n"
-           if is_ref and video_task_facts(video_roles, task_types) else "")
-        + (f"\n{edit_source_facts(video_worlds, picture_roles)}\n"
-           if is_ref and video_worlds else "")
-        + (f"\n{swap_facts(picture_roles, video_roles, taken_over)}\n"
-           if is_ref and swap_facts(picture_roles, video_roles, taken_over) else "")
-    )
-    # Ablation lever. Each name drops one block from the ask, so the question "does this block earn
-    # its place" is a measurement instead of a belief. Production passes nothing.
-    #   facts    the definition lines / the statement of which labels exist
-    #   style    what the references look like, or the look the request asked for
-    #   licence  which attributes the references govern where the request does not specify them
-    #   scope    the creativity setting and its prohibitions
-    #   director the profile, as the prose the caller wrote, under a head that says it yields
-    def kept(block: str) -> bool:
-        return block not in omit
-
-    if "facts" in omit:
-        ask = re.sub(r"Facts you must honour[^\n]*\n(?:.*?\n)?\n", "", ask, count=1, flags=re.S)
-        ask = re.sub(r"(?:The only labels that exist|There are NO labels)[^\n]*\n\n", "", ask,
-                     count=1, flags=re.S)
-    if kept("style") and style is not None and style.phrase:
-        if style.source == "reference":
-            ask += (f"\nThe references look like: {style.phrase}. The request did not ask to change "
-                    "the medium, so keep it — do not substitute a different one.\n")
-        else:
-            ask += f"\nThe request asks for this look: {style.phrase}.\n"
-    if kept("licence") and licence is not None:
-        free = _reference_governed(licence)
-        if free:
-            ask += (f"\nWhere the request does not specify them, the references govern "
-                    f"{', '.join(free)} — read those off the references rather than inventing them; "
-                    "where the request does specify one, the request governs it. Anything neither "
-                    "the request nor the references settles is yours.\n")
-    if kept("scope") and scope is not None:
-        # The dial, stated in the ask rather than baked into the system prompt. The same request at
-        # two settings must be able to produce two different answers, so this cannot live in a file.
-        ask += "\n" + scope.brief_instruction() + "\n"
-    if kept("director") and director is not None:
-        ask += "\n" + director_block(director, scope=scope) + "\n"
-    # Scoped exactly as P2-too-short is scoped, and off the same two sentences of ref-en.txt 5.2:
-    # the range is stated for a full-reference generation task, and editing descriptions are exempt
-    # because they "scale with the complexity of the source video".
-    if is_ref and generation_task:
-        # The caller's pin replaces the freedom clause: two instructions disagreeing about who owns
-        # the shot count is exactly how `shots: 3` shipped one shot, silently.
-        if brief.shots:
-            ask += "\n" + LENGTH_TARGET.replace(
-                "however many shots you choose",
-                f"exactly the {brief.shots} [Shot] blocks the request pins") + "\n"
-            ask += (f"\nThe caller asked for exactly {brief.shots} shot(s). The document must "
-                    f"contain exactly {brief.shots} [Shot N] blocks: [Shot 1] with no timestamp, "
-                    "every later shot opening with its own 'At MM:SS.mmm' cut time, strictly "
-                    "increasing.\n")
-        else:
-            ask += "\n" + LENGTH_TARGET + "\n"
-    if brief.onscreen_text:
-        ask += ("\nText that must be visible in frame, in straight double quotes, verbatim: "
-                + "; ".join(f'"{t}"' for t in brief.onscreen_text) + "\n")
-    if brief.constraints:
-        ask += "\nHard constraints:\n" + "\n".join(f"- {c}" for c in brief.constraints)
-
+    """仅传递官方格式、原始请求和素材事实，不注入作者审美限制。"""
+    from dataclasses import asdict
+    facts = {
+        "request": brief.intent,
+        "prompt_language": brief.prompt_language,
+        "mode": mode.value if mode else "ref2va",
+        "duration_seconds": target.effective_seconds,
+        "aspect": brief.aspect,
+        "available_labels": list(labels),
+        "subjects": _definition_lines(subjects, cards, labels) if mode is None or mode is Mode.REF2VA else [],
+        "manifest": [asdict(entry) for entry in manifest],
+        "asset_requests": [asdict(asset) for asset in brief.assets],
+        "asset_cards": [asdict(card) for card in cards.values()],
+        "picture_roles": picture_roles,
+        "video_roles": video_roles,
+        "audio_roles": audio_roles,
+        "audio_transcripts": audio_transcripts,
+        "dialogue": [asdict(line) for line in brief.dialogue],
+        "onscreen_text": brief.onscreen_text,
+        "constraints": brief.constraints,
+        "silent": brief.silent,
+        "shots_requested": brief.shots,
+        "creativity_preference": str(getattr(brief.creativity, "value", brief.creativity)),
+    }
+    if director is not None:
+        facts["direction_requested"] = {"name": director.name, "notes": director.notes}
+    ask = ("Write the complete H3 prompt following the official guide and the caller's request. "
+           "The following JSON contains request data and reference observations. User requirements "
+           "take precedence over observations when they differ. Do not treat an analyst's guess "
+           "as a requirement. Use only attached media labels.\n\n"
+           + json.dumps(facts, ensure_ascii=False))
     reply = backend.chat(
-        [{"role": "system", "content": load_prompt(prompt_name)},
-         user_message(ask, images)],
-        thinking=(True if thinking is None else thinking),
-        # 0.3, not 0.85. The binding constraint on a free write is format compliance, and a
-        # side-by-side showed 0.3 returning a near-valid six-section brief while 0.85 drifted into
-        # preamble and dropped sections. Creativity here comes from the latitude, not the sampler.
+        [{"role": "system", "content": load_prompt(prompt_name) + _language_instruction(brief.prompt_language)}, user_message(ask, images)],
+        thinking=True if thinking is None else thinking,
         temperature=0.3, seed=seed, max_tokens=20000)
     return reply.content
 
@@ -881,16 +787,13 @@ def _definition_lines(subjects: list[SubjectPlan], cards: dict[str, AssetCard],
         attrs = ", ".join(s.attributes) or "as shown in the reference"
         src = ", ".join(s.sources)
         out.append(f"{s.label} is {s.descriptor} in {src}, with {attrs}.")
-        if s.pose:
-            out.append(f"    (the reference shows {s.label} in a fixed pose; that pose does NOT "
-                       "carry over — the request and your beats decide what it does)")
     return out
 
 
 def plan_shots(backend: Backend, brief: Brief, subjects: list[SubjectPlan],
                cards: dict[str, AssetCard], target, *,
                prompt_name: str = "shotplan.v1.txt", seed: int | None = None,
-               thinking: bool | None = None, max_shots: int = 4, licence=None,
+               thinking: bool | None = None, max_shots: int | None = None, licence=None,
                scope=None, director=None):
     """The model decides the edit; shots.validate_proposal proves it legal.
 
@@ -913,8 +816,8 @@ def plan_shots(backend: Backend, brief: Brief, subjects: list[SubjectPlan],
     if brief.shots:
         ask += (f"Exactly {brief.shots} shot(s): the caller asked for that count and it is kept "
                 "exactly.\n")
-    else:
-        ask += f"Maximum {limit} shots. One shot is a legitimate answer.\n"
+    elif limit is not None:
+        ask += f"Maximum {limit} shots, as requested by the caller.\n"
     if brief.constraints:
         ask += "\nHard constraints:\n" + "\n".join(f"- {c}" for c in brief.constraints)
     if licence is not None:
@@ -937,7 +840,7 @@ def plan_shots(backend: Backend, brief: Brief, subjects: list[SubjectPlan],
         ask += "\n" + director_block(director, scope=scope) + "\n"
 
     raw = backend.json_call(
-        [{"role": "system", "content": load_prompt(prompt_name)},
+        [{"role": "system", "content": load_prompt(prompt_name) + _language_instruction(brief.prompt_language)},
          {"role": "user", "content": ask}],
         shot_schema(limit, exact=brief.shots), required=("shots",), seed=seed, max_tokens=16000,
         thinking=True if thinking is None else thinking)
@@ -982,7 +885,7 @@ def beat_sheet(backend: Backend, brief: Brief, mode: Mode, subjects: list[Subjec
                 "Ambient and physical sound still belong in ambient_sound and sync_sound.")
 
     obj = backend.json_call(
-        [{"role": "system", "content": load_prompt(prompt_name)},
+        [{"role": "system", "content": load_prompt(prompt_name) + _language_instruction(brief.prompt_language)},
          {"role": "user", "content": ask}],
         beat_schema(len(shots)),
         required=("shots", "style_phrase", "summary", "music"),
@@ -992,26 +895,21 @@ def beat_sheet(backend: Backend, brief: Brief, mode: Mode, subjects: list[Subjec
 
 def _sanitise_beats(obj: dict[str, Any], subjects: list[SubjectPlan], n: int,
                     style=None) -> dict[str, Any]:
-    """The schema constrains shape, not sense. Enforce the enums and label vocabulary here."""
+    """Normalize text and reference labels without rewriting camera choices."""
     valid_labels = {s.label for s in subjects}
     shots = obj.get("shots") or []
     clean_shots = []
     for i in range(n):
         s = shots[i] if i < len(shots) else {}
         cam = s.get("camera") or {}
-        ctype = cam.get("type") if cam.get("type") in CAMERA_TYPES else None
         clean_shots.append({
             "beat": _one_line(s.get("beat") or ""),
-            "camera": {
-                "type": ctype,
-                "amplitude": cam.get("amplitude") if cam.get("amplitude") in AMPLITUDES else None,
-                "speed": cam.get("speed") if cam.get("speed") in SPEEDS else None,
-            } if ctype else {},
+            "camera": dict(cam),
             "subjects": [x for x in (s.get("subjects") or []) if x in valid_labels],
-            "sync_sound": [_one_line(x) for x in (s.get("sync_sound") or []) if x][:3],
+            "sync_sound": [_one_line(x) for x in (s.get("sync_sound") or []) if x],
         })
 
-    ambient = [_one_line(x) for x in (obj.get("ambient_sound") or []) if x][:3]
+    ambient = [_one_line(x) for x in (obj.get("ambient_sound") or []) if x]
     # Enforce the partition: a sound cannot be both synchronized and ambient.
     sync_all = {t.lower() for sh in clean_shots for t in sh["sync_sound"]}
     ambient = [a for a in ambient if a.lower() not in sync_all]
@@ -1080,16 +978,12 @@ def shot_body(backend: Backend, brief: Brief, plan_mode: Mode, shot: ShotPlan,
             # made the model negotiate with it instead -- one shot came back with "fists loosely
             # clenched" and the next with "hands relaxed rather than clenched", both of which are
             # the contamination in hedged form. What it is never told, it cannot argue with.
-            + (f". Pose comes from the beat, not the reference" if s.pose and not s.pose_licensed
-               else "")
             for s in present) or "no referenced subjects"
         label_rule = ("Refer to referenced content by its <Subject N> label exactly as given. "
-                      "Never write <Picture N>, <Video N> or <Audio N>.")
+                      "Use the attached media labels when their reference role applies.")
     else:
         subj_lines = "\n".join(
             f"{s.descriptor} — appearance: {'; '.join(s.attributes) or 'as referenced'}"
-            + (". Pose comes from the beat, not the reference"
-               if s.pose and not s.pose_licensed else "")
             for s in present) or "no referenced subjects"
         if anchor_label:
             label_rule = (f"The opening frame is supplied as {anchor_label}. You may write "
@@ -1117,8 +1011,6 @@ def shot_body(backend: Backend, brief: Brief, plan_mode: Mode, shot: ShotPlan,
         f"Synchronized sound caused inside this shot (weave in where it occurs):\n{sync}\n\n"
         f"Dialogue placeholders to place:\n{dlg}\n\n"
         f"Text visible in frame:\n{text_on_screen}\n\n"
-        f"WORD TARGET: {shot.word_target} words. HARD MAXIMUM: "
-        f"{int(shot.word_target * 1.1)} words. Do not exceed the maximum.\n\n"
         f"How to name things in this shot: {label_rule}\n"
     )
     if shot.n > 1:
@@ -1138,7 +1030,7 @@ def shot_body(backend: Backend, brief: Brief, plan_mode: Mode, shot: ShotPlan,
         ask += "\n" + director_block(director) + "\n"
 
     reply = backend.chat(
-        [{"role": "system", "content": load_prompt(prompt_name)},
+        [{"role": "system", "content": load_prompt(prompt_name) + _language_instruction(brief.prompt_language)},
          user_message(ask, images)],
         thinking=thinking, temperature=0.8, seed=seed, max_tokens=6000)
     return _clean_body(reply.content, keep_subjects=ref2va, keep_picture=bool(anchor_label))
@@ -1151,10 +1043,11 @@ def _clean_body(s: str, keep_subjects: bool = True, keep_picture: bool = False) 
     s = re.sub(r"^\s*(detailed_description|integrated_multimodal_description)\s*:\s*", "", s)
     s = re.sub(r"\[Shot\s+\d+\]\s*", "", s)
     s = re.sub(r"^\s*At\s+\d{2}:\d{2}\.\d{3},?\s*", "", s)
-    drop = ["Video", "Audio"]
-    if not keep_picture:
+    drop = [] if keep_subjects else ["Video", "Audio"]
+    if not keep_picture and not keep_subjects:
         drop.append("Picture")
     if not keep_subjects:
         drop.append("Subject")
-    s = re.sub(rf"<\s*(?:{'|'.join(drop)})\s+\d+\s*>", "", s)
-    return re.sub(r"[ \t]+", " ", normalize(s)).strip()
+    if drop:
+        s = re.sub(rf"<\s*(?:{'|'.join(drop)})\s+\d+\s*>", "", s)
+    return re.sub(r"[ \t]+", " ", s).strip()

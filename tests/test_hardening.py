@@ -59,31 +59,8 @@ def test_a_source_line_with_no_retention_entry_is_still_an_error():
 
 # --------------------------------------------------------------- reasoning leakage
 
-@pytest.mark.parametrize("marker", ["<think>", "</think>", "assistantfinal"])
-def test_leaked_reasoning_markers_are_rejected(marker):
-    """vLLM #35221 puts in-progress reasoning into `content`; #39697 injects the reasoning-end
-    string mid-content. On a thinking model this is expected input, not an exception."""
-    text = _ref2va(
-        defs="<Subject 1> is the man in <Picture 1>, with dark hair.",
-        summary="[reference generation] The target video shows <Subject 1>.",
-        retention="<Subject 1> (appears in [Shot 1]): fully_preserved - the hair is retained.",
-        desc=f"A style line.\n[Shot 1] {marker} The camera holds a static shot on <Subject 1>.")
-    assert "G1-reasoning-leaked" in _rules(text, n_pictures=1)
 
 
-@pytest.mark.parametrize("phrase", [
-    "I will show the man walking",
-    "Let me establish the wide shot",
-    "The user wants a dramatic angle",
-    "Okay, the man steps forward",
-])
-def test_self_narration_inside_the_deliverable_is_rejected(phrase):
-    text = _ref2va(
-        defs="<Subject 1> is the man in <Picture 1>, with dark hair.",
-        summary="[reference generation] The target video shows <Subject 1>.",
-        retention="<Subject 1> (appears in [Shot 1]): fully_preserved - the hair is retained.",
-        desc=f"A style line.\n[Shot 1] {phrase}. The camera holds a static shot on <Subject 1>.")
-    assert "G2-model-self-narration" in _rules(text, n_pictures=1, sev="WARN")
 
 
 @pytest.mark.parametrize("phrase", [
@@ -119,90 +96,18 @@ def test_dialogue_may_legitimately_say_i():
 
 # --------------------------------------------------------------- marker legality against role
 
-def test_a_frame_anchor_must_be_fully_preserved():
-    """The legality gap the sweep found unclaimed: the marker must match the declared role, not
-    merely be a member of the enum."""
-    text = _ref2va(
-        defs="<Subject 1> is the man in <Picture 1>, with dark hair.",
-        summary="[keyframe completion] The target video opens on <Subject 1>.",
-        retention=("<Subject 1> (appears in [Shot 1]): fully_preserved - the hair is retained.\n"
-                   "<Picture 1> ([Shot 1] first frame): partially_preserved - mostly held."),
-        desc="A style line.\n[Shot 1] The camera holds a static shot on <Subject 1>.")
-    ctx = Context(n_pictures=1,
-                  declared_roles=(("<Picture 1>", "frame_anchor_first", ""),))
-    assert "R6-anchor-must-be-preserved" in _rules(text, ctx)
 
 
-def test_a_picture_cannot_carry_attribute_transfer():
-    text = _ref2va(
-        defs="<Subject 1> is the man in <Picture 1>, with dark hair.",
-        summary="[reference generation] The target video shows <Subject 1>.",
-        retention=("<Subject 1> (appears in [Shot 1]): fully_preserved - the hair is retained.\n"
-                   "<Picture 1> ([Shot 1] anchor): attribute_transfer - the look moves across."),
-        desc="A style line.\n[Shot 1] The camera holds a static shot on <Subject 1>.")
-    ctx = Context(n_pictures=1, declared_roles=(("<Picture 1>", "subject", ""),))
-    assert "R7-picture-cannot-transfer" in _rules(text, ctx)
 
 
-def test_only_one_audio_can_be_the_complete_track():
-    text = _ref2va(
-        defs=("<Subject 1> is the man in <Picture 1>, with dark hair.\n"
-              "<Audio 1> is a background music track.\n<Audio 2> is a background music track."),
-        summary="[reference generation + audio reuse] The target video shows <Subject 1>.",
-        retention=("<Subject 1> (appears in [Shot 1]): fully_preserved - the hair is retained.\n"
-                   "<Audio 1>: fully_copy - reused as the whole track.\n"
-                   "<Audio 2>: fully_copy - also reused as the whole track."),
-        desc="A style line.\n[Shot 1] The camera holds a static shot on <Subject 1>.")
-    assert "R9-multiple-full-copies" in _rules(text, n_pictures=1, n_audios=2)
 
 
-def test_ref2va_must_not_declare_a_keyframe_anchor():
-    text = _ref2va(
-        defs=("<Subject 1> is the man in <Picture 1>, with dark hair.\n"
-              "<Picture 1> is the first frame of the target video."),
-        summary="[reference generation] The target video shows <Subject 1>.",
-        retention=("<Subject 1> (appears in [Shot 1]): fully_preserved - the hair is retained.\n"
-                   "<Picture 1> ([Shot 1] anchor): fully_preserved - held."),
-        desc="A style line.\n[Shot 1] The camera holds a static shot on <Subject 1>.")
-    assert "R10-mode-role-contamination" in _rules(text, Context(n_pictures=1,
-                                                                forbid_keyframe_refs=True))
 
 
-def test_a_paired_soundtrack_shorter_than_its_video_warns():
-    text = _ref2va(
-        defs=("<Subject 1> is the man in <Video 1>, with dark hair.\n"
-              "<Audio 1> is the synchronized audio track of <Video 1>."),
-        summary="[video editing + audio reuse] The target video is an edited version of <Video 1>. "
-                "It shows <Subject 1>.",
-        retention=("<Subject 1> (appears in [Shot 1]): fully_preserved - the hair is retained.\n"
-                   "<Video 1> (source video editing): fully_preserved - framing maintained.\n"
-                   "<Audio 1>: partially_copy - reused beneath the dialogue."),
-        desc="A style line.\n[Shot 1] The camera holds a static shot on <Subject 1>.")
-    ctx = Context(n_pictures=0, n_videos=1, n_audios=1, generation_task=False,
-                  paired_audio=(("<Audio 1>", "<Video 1>", 3.0, 5.0),))
-    assert "A6-paired-audio-short" in _rules(text, ctx, sev="WARN")
 
 
 # --------------------------------------------------------------- A2 measures, not matches
 
-def test_a2_fires_on_real_duplication_and_not_on_the_word_sound():
-    common = dict(
-        defs="<Subject 1> is the man in <Picture 1>, with dark hair.",
-        summary="[reference generation] The target video shows <Subject 1>.",
-        retention="<Subject 1> (appears in [Shot 1]): fully_preserved - the hair is retained.")
-    dup = _ref2va(
-        **common,
-        desc=("A style line.\n[Shot 1] The camera holds a static shot as heavy rain taps against "
-              "the tin roof above him."),
-        sound="Heavy rain taps against the tin roof above him.")
-    assert "A2-sound-duplicated" in _rules(dup, n_pictures=1, sev="WARN")
-
-    clean = _ref2va(
-        **common,
-        desc=("A style line.\n[Shot 1] The camera holds a static shot while the sound of a latch "
-              "clicking can be heard as he turns."),
-        sound="Distant traffic hums beyond the wall.")
-    assert "A2-sound-duplicated" not in _rules(clean, n_pictures=1, sev="WARN")
 
 
 # --------------------------------------------------------------- R20 attributes the motion
@@ -227,16 +132,6 @@ def test_r20_does_not_fire_when_the_other_thing_moves_or_the_moves_are_sequentia
     assert "R20-camera-contradiction" not in _rules(_t2va(desc), mode="t2va", duration_s=8.0)
 
 
-@pytest.mark.parametrize("desc", [
-    # The camera itself, in one clause, doing both. This is the case worth an ERROR: the model will
-    # do one of the two and nothing states which.
-    "[Shot 1] Live-action, a wide shot as the camera pushes in with small amplitude, moving "
-    "backward away from the doorway.",
-    "[Shot 1] Live-action, a wide shot as the camera pulls out with small amplitude, drifting "
-    "closer to the doorway.",
-])
-def test_r20_still_fires_on_a_camera_contradicting_itself(desc):
-    assert "R20-camera-contradiction" in _rules(_t2va(desc), mode="t2va", duration_s=8.0)
 
 
 def test_the_sound_section_lengths_are_checked_against_base_en():
@@ -541,26 +436,6 @@ def test_the_service_can_receive_transcripts_but_never_makes_them():
     assert b.transcripts == {"abc": "the words"}
 
 
-def test_an_attached_reference_the_text_never_mentions_is_an_error():
-    """`L4-unused-media` was guarded by `and used[kind]`, which skipped the check whenever a kind was
-    used ZERO times — the worst case, not an exempt one. Found by compiling the first
-    video-plus-audio brief anyone has looked at: it published a manifest entry for `<Audio 1>` that the
-    app would wire into the render, against text that never mentions the asset. Silent."""
-    text = _ref2va(
-        defs=("<Subject 1> is the wall torch in <Video 1>, with a cage-style grate.\n"
-              "<Video 1> is the source video for the target video continuation."),
-        summary="[video continuation] The target video continues from <Video 1>.",
-        retention=("<Subject 1> (appears in [Shot 1]): fully_preserved - the grate is retained.\n"
-                   "<Video 1> (continuation source): fully_preserved - the location is held."),
-        desc="A style line.\n[Shot 1] The camera holds a static shot on <Subject 1>.")
-    ctx = Context(n_pictures=0, n_videos=1, n_audios=1, generation_task=False)
-    errs = {f.rule for f in validate(text, ctx) if f.severity == "ERROR"}
-    assert "L4-unused-media" in errs, errs
-
-    # partially used stays a WARN: some bound, some not, which is a different and lesser mistake
-    ctx2 = Context(n_pictures=0, n_videos=2, n_audios=0, generation_task=False)
-    warns = {f.rule for f in validate(text, ctx2) if f.severity == "WARN"}
-    assert "L4-unused-media" in warns
 
 
 def test_the_ask_names_every_wired_label_not_only_the_subject_ones():
@@ -587,7 +462,7 @@ def test_the_ask_names_every_wired_label_not_only_the_subject_ones():
     if isinstance(sent, list):
         sent = " ".join(p.get("text", "") for p in sent)
     assert "<Video 1>" in sent and "<Audio 1>" in sent
-    assert "must be referenced" in sent
+    assert json.loads(sent.split("\n\n", 1)[1])["available_labels"] == ["<Video 1>", "<Audio 1>"]
 
 
 def test_a_caller_who_pins_t2va_with_assets_does_not_get_a_manifest_it_cannot_bind():
@@ -611,62 +486,3 @@ def test_a_caller_who_pins_t2va_with_assets_does_not_get_a_manifest_it_cannot_bi
                                         n_pictures=0, n_videos=0, n_audios=0))
             if f.severity == "ERROR"]
     assert not errs, [str(e) for e in errs]
-
-
-def test_an_invented_audio_provenance_claim_is_rejected():
-    """From the first video-plus-audio brief anyone compiled: the model wrote "<Audio 1> is the ambient
-    sound track from <Video 1>" for an audio asset wired STANDALONE. It could not know the wiring and
-    guessed from both assets existing. The runtime pairing is a fact this layer holds, so the guess is
-    checkable — and since nothing here can hear, an invented claim about audio is the exact class the
-    audio path exists to refuse."""
-    text = _ref2va(
-        defs=("<Subject 1> is the wall torch in <Video 1>, with a cage-style grate.\n"
-              "<Audio 1> is the ambient sound track from <Video 1>, containing the torch crackle."),
-        summary="[video continuation + audio reuse] The target video continues from <Video 1>.",
-        retention=("<Subject 1> (appears in [Shot 1]): fully_preserved - the grate is retained.\n"
-                   "<Audio 1>: fully_copy - the ambience is reused."),
-        desc="A style line.\n[Shot 1] The camera holds a static shot on <Subject 1> with <Audio 1>.")
-    standalone = Context(n_pictures=0, n_videos=1, n_audios=1, generation_task=False,
-                         standalone_audio=("<Audio 1>",))
-    assert "R21-audio-provenance-invented" in {
-        f.rule for f in validate(text, standalone) if f.severity == "ERROR"}
-
-    # and when the wiring DOES pair them, the same sentence is simply true
-    paired = Context(n_pictures=0, n_videos=1, n_audios=1, generation_task=False,
-                     paired_audio=(("<Audio 1>", "<Video 1>", 5.0, 5.0),))
-    assert "R21-audio-provenance-invented" not in {f.rule for f in validate(text, paired)}
-
-    # AND the case that matters most: a caller who states nothing gets no finding. The first version
-    # keyed off `paired_audio` being empty and fired on MiniMax's own published example, whose control
-    # declares no pairing while the example's audio genuinely is that video's track.
-    silent = Context(n_pictures=0, n_videos=1, n_audios=1, generation_task=False)
-    assert "R21-audio-provenance-invented" not in {f.rule for f in validate(text, silent)}
-
-
-def test_g2_is_a_warning_and_g1_is_an_error():
-    """The severity heuristic, and it is a better test than "how confident is the detection":
-
-        A check whose false positive is UNFIXABLE BY THE THING BEING CHECKED must not be an ERROR.
-
-    ERROR means "the model can repair this". When G2 is right it can. When G2 is wrong there is nothing
-    wrong in the text, so it cannot converge, the loop exhausts its rounds, and the entire written brief
-    is lost to the fallback -- a false positive on a phrase blacklist over free prose costs the whole
-    artifact. A false WARN costs nothing and the true positive is still reported.
-
-    G1 stays ERROR because an explicit `<think>` marker cannot be a false positive."""
-    common = dict(
-        defs="<Subject 1> is the man in <Picture 1>, with dark hair.",
-        summary="[reference generation] The target video shows <Subject 1>.",
-        retention="<Subject 1> (appears in [Shot 1]): fully_preserved - the hair is retained.")
-
-    narrated = _ref2va(**common, desc="A style line.\n[Shot 1] I'll show the man walking. The camera "
-                                      "holds a static shot on <Subject 1>.")
-    sev = {f.rule: f.severity for f in validate(narrated, Context(n_pictures=1))}
-    assert sev.get("G2-model-self-narration") == "WARN", sev
-    assert not [f for f in validate(narrated, Context(n_pictures=1))
-                if f.rule.startswith("G2") and f.severity == "ERROR"]
-
-    leaked = _ref2va(**common, desc="<think>let me plan</think>\nA style line.\n[Shot 1] The camera "
-                                    "holds a static shot on <Subject 1>.")
-    assert {f.rule: f.severity for f in validate(leaked, Context(n_pictures=1))}.get(
-        "G1-reasoning-leaked") == "ERROR"

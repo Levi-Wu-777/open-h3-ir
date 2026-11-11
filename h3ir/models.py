@@ -219,6 +219,7 @@ class Brief:
     # canvas and is the user's to edit from that moment. See director.py.
     director: str = ""
     director_profile: dict[str, Any] | None = None
+    prompt_language: str = "English"
 
     def hash(self) -> str:
         return _sha(asdict(self))

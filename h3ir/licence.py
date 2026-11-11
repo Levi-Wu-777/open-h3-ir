@@ -323,29 +323,5 @@ class Licence:
 
 
 def resolve_licence(brief: Brief, cards: dict[str, AssetCard]) -> Licence:
-    intent = brief.intent or ""
-    has_visual_ref = any(c.kind in (AssetKind.IMAGE, AssetKind.VIDEO) for c in cards.values())
-    transform = transformation_intent(brief)
-
-    lic = Licence(transform_phrase=transform)
-
-    def decide(attr: str, explicit: bool, why: str) -> None:
-        if not has_visual_ref:
-            lic.governs[attr] = "request"
-            lic.reasons[attr] = "no visual reference is attached"
-            return
-        lic.governs[attr] = "request" if explicit else "reference"
-        lic.reasons[attr] = why if explicit else (
-            f"the request does not explicitly specify {attr}, so the reference governs it")
-
-    decide(ACTION, any(p.search(intent) for p in ACTION_PATTERNS),
-           "the request states what the subject does")
-    decide(MEDIUM, transform is not None,
-           f"the request asks for a transformation ({transform!r})")
-    decide(WARDROBE, _mentions(intent, GARMENT_WORDS)
-           or any(p.search(intent) for p in WARDROBE_PATTERNS),
-           "the request speaks to what the subject wears")
-    decide(LIGHTING, _mentions(intent, LIGHTING_WORDS), "the request names the lighting")
-    decide(FRAMING, _mentions(intent, FRAMING_WORDS), "the request names the framing")
-    decide(PALETTE, _mentions(intent, PALETTE_WORDS), "the request names the palette")
-    return lic
+    """不以作者词表推断用户是否有权改变素材属性。"""
+    return Licence(governs={attribute: "request" for attribute in ATTRIBUTES})

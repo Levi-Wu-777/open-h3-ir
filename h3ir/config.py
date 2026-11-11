@@ -12,6 +12,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 PKG_DIR = Path(__file__).resolve().parent
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+DEEPSEEK_MODEL = "deepseek-flash"
+DEEPSEEK_SECRET_PATH = "/accounts/deepseek"
+DEEPSEEK_SECRET_NAME = "DEEPSEEK_API_KEY"
+# 2026-11-12 同套十组的 26 次 API 调用最慢 12.03 sec，取约两倍。
+DEEPSEEK_TIMEOUT_SECONDS = 24.0
+
 
 
 def _env(name: str, default: str) -> str:

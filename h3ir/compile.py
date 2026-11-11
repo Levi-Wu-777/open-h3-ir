@@ -29,6 +29,7 @@ from .grid import canvas_for_aspect
 from .lora import resolve_loras
 from .mode import infer_mode, needs_clarification
 from .models import AssetCard, AssetKind, Brief, Finding, IRDocument, Mode, Role, SWAP_ROLES
+from .policies import active_findings
 from .plan import ProfileOptions, allocate_from_proposal, build_plan, swap_decisions
 from . import director as director_mod
 from .licence import resolve_licence
@@ -107,97 +108,13 @@ def check_request(brief: Brief) -> None:
             f"`aspect` {brief.aspect!r} is not a ratio. Write it as W:H (16:9, 9:16, 1:1) or as "
             "WxH pixels; any canvas that is a multiple of 32 renders.") from e
     if brief.shots is not None:
-        from .shots import MIN_SHOT_MS, PINNED_SHOTS_MAX
-        if not 1 <= brief.shots <= PINNED_SHOTS_MAX:
-            raise BriefRefused(
-                "shots-invalid",
-                f"`shots` is {brief.shots}. An explicit count is kept exactly, so it must be a "
-                f"number from 1 to {PINNED_SHOTS_MAX}; leave it unset and the writer decides.")
-        floor_s = brief.shots * MIN_SHOT_MS / 1000
-        if brief.seconds < floor_s:
-            raise BriefRefused(
-                "shots-do-not-fit",
-                f"{brief.shots} shots need at least {floor_s:.1f}s at {MIN_SHOT_MS / 1000:.1f}s a "
-                f"shot -- below that a cut reads as a glitch -- and this render is "
-                f"{brief.seconds:g}s. Ask for fewer shots or a longer video.")
+        if brief.shots < 1:
+            raise BriefRefused("shots-invalid", "`shots` must be a positive integer.")
 
 
 def check_swap(brief: Brief, plan) -> None:
-    """Refuse a swap the wiring cannot make unambiguous, instead of guessing which figure.
-
-    Two ways a `placed_subject` / `replacement_subject` picture can be meaningless, and both are
-    the caller's to fix, so both get a sentence rather than an invariant crash -- the handling
-    AGENTS.md asks for and the LoRA variant mismatch still does not have.
-
-      no edit source   both roles are statements about a clip being edited. Without one there is
-                       nothing to place into or replace inside, and silently demoting the picture
-                       to `subject` would produce a valid-looking brief that does not do what the
-                       caller wired.
-      nothing said     `plan.swap_decisions` binds like for like, and a clip routinely yields
-                       several subjects of different kinds. One candidate is a fact. Zero or two,
-                       with nothing said about which, is a blank: answering it by picking the
-                       first would put the wrong figure's name into a shipped document, which
-                       validates perfectly. So it asks for the caller's words, which are never
-                       wrong to give.
-
-                       It does NOT go the other way. Words that do not fit the analyser's reading
-                       of the clip are not refused, because that reading comes off three sampled
-                       frames and is wrong routinely; the words become the figure instead. Two
-                       refusals that judged the caller against it were removed on the owner's
-                       ruling. `plan.swap_decisions` carries the argument.
-      the wrong field  `replaces` on anything but a `replacement_subject` is a statement this
-                       layer would drop on the floor, so it is refused rather than ignored.
-
-    Runs on the DRAFT plan, so it reads the same binding the shipped document will carry rather
-    than a second implementation of the same rule that can drift from it.
-    """
-    wanted = [a for a in brief.assets if a.role in SWAP_ROLES]
-    said = [a for a in brief.assets if (a.replaces or "").strip()]
-    for a in said:
-        if a.role is not Role.REPLACEMENT_SUBJECT:
-            raise BriefRefused(
-                "replaces-without-the-role",
-                f"an asset attached as {a.role.value!r} says it replaces "
-                f"{(a.replaces or '').strip()!r}. Only a picture attached as "
-                "`replacement_subject` takes somebody's place, so this statement would be "
-                "silently dropped. Change the role, or remove the statement.")
-    if not wanted:
-        return
-    if not any(a.role is Role.EDIT_SOURCE and a.kind is AssetKind.VIDEO for a in brief.assets):
-        roles = ", ".join(sorted({a.role.value for a in wanted}))
-        raise BriefRefused(
-            "swap-without-edit-source",
-            f"a picture is attached as {roles}, which says what happens to a clip being edited, "
-            "and no video is attached as `edit_source`. Attach the clip to edit, or attach the "
-            "picture as `subject` if you want what it shows to appear in a new scene instead.")
-    if not any(a.role is Role.REPLACEMENT_SUBJECT for a in wanted):
-        return
-    clip = next((m.label for m in plan.manifest if m.role is Role.EDIT_SOURCE), "<Video 1>")
-    for d in swap_decisions(plan.subjects, plan.manifest):
-        if not d.problem:
-            continue
-        found = ", ".join(f"{c.label} ({c.descriptor})" for c in d.candidates) or "none"
-        if d.problem == "undefined":
-            raise BriefRefused(
-                "replacement-subject-undefined",
-                f"{d.picture} is attached as `replacement_subject` and produced no subject to put "
-                f"into {clip}. Attach a picture of the person or object that should take over.")
-        kind = d.incoming.kind
-        if d.problem == "unnamed":
-            raise BriefRefused(
-                "replacement-target-unnamed",
-                f"{d.picture} shows {d.incoming.descriptor}, a {kind}, and there is no other "
-                f"{kind} left in {clip} for it to take over from. Say who it replaces in your own "
-                "words, on the picture itself: a figure can be absent from the frames this layer "
-                "sampled and still be in the clip, and only you can see that.")
-        if d.problem == "crowded":
-            raise BriefRefused(
-                "replacement-target-ambiguous",
-                f"{d.picture} shows {d.incoming.descriptor}, a {kind}, and {clip} contains "
-                f"{len(d.candidates)} {kind}(s) it could take over from: {found}. This layer will "
-                "not pick one, because naming the wrong figure produces a brief that reads "
-                "perfectly and swaps the wrong thing. Say who it replaces in your own words, on "
-                "the picture itself.")
+    """换角意图交给写作模型，不以抽帧或词语匹配拒绝请求。"""
+    return None
 
 
 def check_capacity(brief: Brief) -> None:
@@ -374,7 +291,7 @@ def compile_brief(brief: Brief, *, backend: Backend | None = None,
             return IRDocument(
                 ir_version=IR_VERSION, profile=opts.name, mode=mode,
                 prompt=result.prompt, plan=plan, sections=result.sections,
-                prompt_tokens=n_tokens, findings=findings,
+                prompt_tokens=n_tokens, findings=active_findings(findings),
                 source=source, fallback_reason=reason,
                 provenance={
                     "analyzer_model": backend.cfg.model,
@@ -391,6 +308,7 @@ def compile_brief(brief: Brief, *, backend: Backend | None = None,
                     "director": director_mod.note(director),
                     "omit": list(omit) or None,
                     "request": brief.intent,
+                    "prompt_language": brief.prompt_language,
                     "beatsheet_prompt": beatsheet_prompt,
                 "shotplan_prompt": shotplan_prompt,
                 "shot_plan": dict(shot_plan_record) or None,
@@ -419,7 +337,7 @@ def compile_brief(brief: Brief, *, backend: Backend | None = None,
                 t = time.time()
                 labels = tuple(m.label for m in draft_plan.manifest)
                 imgs = [a.path for a in brief.assets
-                        if a.kind.value == "image" and a.path][:2] or None
+                        if a.kind.value == "image" and a.path] or None
                 scope = _scope(brief, draft_plan)
                 chosen_compose = compose_prompt or (
                     "compose.v2.txt" if mode is Mode.REF2VA else "compose_base.v1.txt")
@@ -448,7 +366,7 @@ def compile_brief(brief: Brief, *, backend: Backend | None = None,
                                        video_worlds=worlds, taken_over=taken,
                                        generation_task=("video editing"
                                                         not in draft_plan.task_types),
-                                       omit=omit)
+                                       omit=omit, manifest=draft_plan.manifest)
                 timings["compose_s"] = round(time.time() - t, 2)
 
                 from .prose import _definition_lines
@@ -494,7 +412,7 @@ def compile_brief(brief: Brief, *, backend: Backend | None = None,
                     # full-reference format during the pass meant to correct it.
                     candidate = fix_with_findings(backend, fixed.text, errors,
                                                   labels=inventory, sections=_sections_for(mode),
-                                                  seed=seed)
+                                                  prompt_language=brief.prompt_language, seed=seed)
                     timings[f"fix{rounds}_s"] = round(time.time() - t2, 2)
                     fixed, found, n_tokens = _verify(candidate)
                     mechanical_repairs += fixed.repairs
@@ -530,8 +448,8 @@ def compile_brief(brief: Brief, *, backend: Backend | None = None,
                     log.warning("falling back to the draft — %s", reason)
                     doc = _document(draft_plan, draft_result, draft_findings, draft_tokens,
                                     "draft", reason)
-                    doc.findings = list(draft_findings) + [
-                        Finding("X13-written-rejected", "WARN", reason)]
+                    doc.findings = active_findings(list(draft_findings) + [
+                        Finding("X13-written-rejected", "WARN", reason)])
                     doc.provenance["rejected_written"] = fixed.text
                     doc.provenance["rejected_rules"] = [f"{f.rule}: {f.msg}" for f in errors]
                     doc.provenance["fix_rounds"] = rounds
@@ -544,7 +462,7 @@ def compile_brief(brief: Brief, *, backend: Backend | None = None,
                 doc.prompt = fixed.text
                 doc.sections = _split_written(fixed.text)
                 doc.prompt_tokens = n_tokens
-                doc.findings = findings
+                doc.findings = active_findings(findings)
                 doc.provenance["repairs"] = mechanical_repairs
                 doc.provenance["fix_rounds"] = rounds
                 doc.provenance["unfixable"] = list(dict.fromkeys(stuck))
@@ -556,8 +474,8 @@ def compile_brief(brief: Brief, *, backend: Backend | None = None,
                 log.warning("falling back to the draft — %s", reason)
                 doc = _document(draft_plan, draft_result, draft_findings, draft_tokens,
                                 "draft", reason)
-                doc.findings = list(draft_findings) + [
-                    Finding("X9-model-unavailable-midway", "WARN", reason)]
+                doc.findings = active_findings(list(draft_findings) + [
+                    Finding("X9-model-unavailable-midway", "WARN", reason)])
                 return doc
 
         # --- the additive pass: prose enrichment over a bounded surface ------------------
@@ -623,25 +541,12 @@ def compile_brief(brief: Brief, *, backend: Backend | None = None,
                 if shot.n == 1 and anchor_images:
                     paths = [a.path for a in brief.assets
                              if a.sha256 in {m.sha256 for m in anchor_images} and a.path]
-                    imgs = paths[:2] or None
+                    imgs = paths or None
                 shot.body = shot_body(backend, brief, mode, shot, plan.subjects,
                                       plan.style_phrase, prompt_name=prose_prompt,
                                       thinking=thinking_prose, seed=seed, images=imgs,
                                       anchor_label=anchor_label if shot.n == 1 else None,
                                       director=director)
-                # Under-writing is the documented failure mode of a prose model on this task,
-                # so the floor is enforced with one retry rather than asked for again.
-                floor = int(shot.word_target * 0.75)
-                if len(shot.body.split()) < floor:
-                    log.info("shot %d landed %d words under a %d floor; expanding once",
-                             shot.n, len(shot.body.split()), floor)
-                    shot.body = shot_body(backend, brief, mode, shot, plan.subjects,
-                                          plan.style_phrase, prompt_name=prose_prompt,
-                                          thinking=thinking_prose, seed=(seed or 0) + 101,
-                                          images=imgs,
-                                          anchor_label=anchor_label if shot.n == 1 else None,
-                                          director=director,
-                                          expand_from=shot.body)
             timings["prose_s"] = round(time.time() - t, 2)
 
             _reconcile_scopes(plan)
@@ -655,8 +560,8 @@ def compile_brief(brief: Brief, *, backend: Backend | None = None,
                 log.warning("falling back to the deterministic draft — %s", reason)
                 doc = _document(draft_plan, draft_result, draft_findings, draft_tokens,
                                 "draft", reason)
-                doc.findings = list(draft_findings) + [
-                    Finding("X8-enriched-rejected", "WARN", reason)]
+                doc.findings = active_findings(list(draft_findings) + [
+                    Finding("X8-enriched-rejected", "WARN", reason)])
                 return doc
             return _document(plan, result, findings, n_tokens, "enriched")
 
@@ -665,8 +570,8 @@ def compile_brief(brief: Brief, *, backend: Backend | None = None,
             log.warning("falling back to the deterministic draft — %s", reason)
             doc = _document(draft_plan, draft_result, draft_findings, draft_tokens,
                             "draft", reason)
-            doc.findings = list(draft_findings) + [
-                Finding("X9-model-unavailable-midway", "WARN", reason)]
+            doc.findings = active_findings(list(draft_findings) + [
+                Finding("X9-model-unavailable-midway", "WARN", reason)])
             return doc
 
     finally:
@@ -753,6 +658,7 @@ def _written_context(brief: Brief, mode, plan, cards, n_tokens: int, style, lice
                    for m in plan.manifest if m.paired_with)
     return Context(
         mode=mode.value,
+        prompt_language=brief.prompt_language,
         duration_s=plan.target.effective_seconds,
         n_pictures=counts["Picture"], n_videos=counts["Video"], n_audios=counts["Audio"],
         expected_dialogue=tuple(d.text for d in brief.dialogue),
@@ -1055,6 +961,7 @@ def _assess(plan, brief: Brief, mode, opts: ProfileOptions,
                    for m in plan.manifest if m.paired_with)
     ctx = Context(
         mode=mode.value,
+        prompt_language=brief.prompt_language,
         duration_s=plan.target.effective_seconds,
         n_pictures=counts["Picture"], n_videos=counts["Video"], n_audios=counts["Audio"],
         expected_dialogue=tuple(d.text for d in brief.dialogue),
@@ -1092,7 +999,7 @@ def _assess(plan, brief: Brief, mode, opts: ProfileOptions,
                 findings.append(Finding("X7-subject-not-cited", "WARN",
                                         f"{label} is planned into shot {shot.n} but its prose "
                                         "never names it"))
-    return result, findings, n_tokens
+    return result, active_findings(findings), n_tokens
 
 
 def _inject_lora_triggers(plan, opts: ProfileOptions) -> None:
@@ -1146,10 +1053,10 @@ def amend_brief(brief: Brief, change: str, backend: Backend) -> tuple[Brief, lis
         AMEND_SCHEMA, required=("intent", "changed"), max_tokens=2500)
 
     seconds = brief.seconds
-    if isinstance(obj.get("seconds"), (int, float)) and 1 <= float(obj["seconds"]) <= 15:
+    if isinstance(obj.get("seconds"), (int, float)) and float(obj["seconds"]) > 0:
         seconds = float(obj["seconds"])
     shots = brief.shots
-    if isinstance(obj.get("shots"), int) and 1 <= obj["shots"] <= 4:
+    if isinstance(obj.get("shots"), int) and obj["shots"] >= 1:
         shots = obj["shots"]
     constraints = [str(c) for c in (obj.get("constraints") or brief.constraints)]
 

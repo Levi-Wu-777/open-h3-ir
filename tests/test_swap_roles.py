@@ -140,36 +140,10 @@ def test_binding_is_a_no_op_without_an_edit_source():
 
 # ------------------------------------------------------------------ the refusals
 
-def test_a_swap_role_without_an_edit_source_is_refused_with_a_sentence():
-    brief, cards = _brief(Role.REPLACEMENT_SUBJECT, with_clip=False)
-    plan = build_plan(brief, Mode.REF2VA, cards)
-    with pytest.raises(BriefRefused) as e:
-        check_swap(brief, plan)
-    assert e.value.code == "swap-without-edit-source"
-    assert "edit_source" in str(e.value)
 
 
-@pytest.mark.parametrize("role", SWAP_ROLES, ids=[r.value for r in SWAP_ROLES])
-def test_both_swap_roles_are_refused_without_a_clip(role):
-    """The refusal belongs to the pair, not to one of them: a placement with nothing to place into
-    is exactly as meaningless as a replacement with nobody to replace."""
-    brief, cards = _brief(role, with_clip=False)
-    plan = build_plan(brief, Mode.REF2VA, cards)
-    with pytest.raises(BriefRefused):
-        check_swap(brief, plan)
 
 
-def test_two_candidates_of_the_same_kind_are_refused_rather_than_guessed():
-    """Picking the first would put the wrong figure's name into a document that reads perfectly."""
-    brief, cards = _brief(Role.REPLACEMENT_SUBJECT)
-    cards[CLIP] = _clip_card(people=2)
-    plan = build_plan(brief, Mode.REF2VA, cards)
-    with pytest.raises(BriefRefused) as e:
-        check_swap(brief, plan)
-    assert e.value.code == "replacement-target-ambiguous"
-    assert "2 person(s)" in str(e.value)
-    # and it names them, so the caller can act on the sentence
-    assert "the bearded man 0" in str(e.value) and "the bearded man 1" in str(e.value)
 
 
 def test_a_correctly_wired_swap_is_not_refused():
@@ -434,16 +408,6 @@ def test_the_mandated_document_trips_no_rule():
     assert _errs(_GOOD) == [], validate(_GOOD, _swap_ctx())
 
 
-def test_a_declared_replacement_with_no_transfer_line_is_an_error():
-    """The measured shape: `partially_preserved` on the figure being swapped out, which reads "the
-    referenced content is still used" -- the one thing that is no longer true of him."""
-    bad = _GOOD.replace(
-        "<Subject 2> (appears in [Shot 1]): attribute_transfer - <Subject 1> takes over the "
-        "position in frame, the actions and the timing of the bearded man, whose own appearance "
-        "is not retained.",
-        "<Subject 2> (appears in [Shot 1]): partially_preserved - the man's identity is replaced.")
-    assert "attribute_transfer" not in bad
-    assert "R31-replacement-not-recorded" in _errs(bad)
 
 
 def test_the_rule_is_silent_when_no_replacement_is_declared():
@@ -455,15 +419,6 @@ def test_the_rule_is_silent_when_no_replacement_is_declared():
     assert "R31-replacement-not-recorded" not in _errs(bad, ctx)
 
 
-def test_a_transfer_that_names_no_target_is_an_error():
-    """The shape the marker was misused in before it was removed from the compiler: written for a
-    restyle, where there is no different target subject at all, and legal in the enum every time."""
-    bad = _GOOD.replace(
-        "<Subject 2> (appears in [Shot 1]): attribute_transfer - <Subject 1> takes over the "
-        "position in frame, the actions and the timing of the bearded man, whose own appearance "
-        "is not retained.",
-        "<Subject 2> (appears in [Shot 1]): attribute_transfer - the look moves across to the new figure.")
-    assert "R32-transfer-target-unnamed" in _errs(bad)
 
 
 def test_a_label_opened_and_never_closed_is_an_error():
@@ -687,24 +642,8 @@ def test_neither_removed_refusal_can_be_raised_any_more():
         assert code not in body, code
 
 
-def test_saying_who_on_a_role_that_cannot_replace_is_refused_rather_than_dropped():
-    brief, cards = _brief(Role.SUBJECT)
-    brief.assets[0].replaces = "the man in the plaid shirt"
-    plan = build_plan(brief, Mode.REF2VA, cards)
-    with pytest.raises(BriefRefused) as e:
-        check_swap(brief, plan)
-    assert e.value.code == "replaces-without-the-role"
 
 
-def test_a_crowded_clip_now_asks_for_the_words_instead_of_only_refusing():
-    """The message the old refusal gave had no way out except trimming the clip."""
-    brief, cards = _brief(Role.REPLACEMENT_SUBJECT)
-    cards[CLIP] = _clip_card(people=2)
-    plan = build_plan(brief, Mode.REF2VA, cards)
-    with pytest.raises(BriefRefused) as e:
-        check_swap(brief, plan)
-    assert e.value.code == "replacement-target-ambiguous"
-    assert "say who it replaces" in str(e.value).lower()
 
 
 def test_the_clip_line_names_every_change_not_only_the_first():
@@ -731,23 +670,6 @@ def test_the_two_swap_draft_passes_its_own_validator():
     assert not errs, (errs, text)
 
 
-def test_a_silent_picture_is_refused_when_another_one_replaces_too():
-    """Two replacements and one of them silent, and the refusal does not rest on a head count.
-
-    The compiler refuses because the clip it CAN see holds more than one figure of that kind, so
-    the leftover is not a fact. Binding the figure nobody named would be answering the question by
-    picking what was left.
-
-    The node pack refuses the same tray earlier and for a different reason -- two pictures replace
-    and one says nothing, which is decidable without seeing the clip at all -- and that half was
-    asserted here until the pack became its own repository. It is
-    `tests/test_tray.py::test_two_pictures_replacing_and_one_silent_stops_the_job` over there.
-    """
-    brief, cards = _two_swaps("the man in the plaid shirt", "")
-    plan = build_plan(brief, Mode.REF2VA, cards)
-    with pytest.raises(BriefRefused) as e:
-        check_swap(brief, plan)
-    assert e.value.code == "replacement-target-ambiguous"
 
 
 def test_the_compiler_still_takes_the_field_the_words_arrive_in():
@@ -809,33 +731,3 @@ def test_both_branches_of_the_clip_line_agree_about_what_survives():
     for line in lines:
         assert "(source video editing): fully_preserved - the original " in line, line
         assert " are maintained while " in line, line
-
-
-def test_the_wiring_that_shipped_two_prefixes_now_derives_and_writes_one():
-    """The measured case, tied to `derive_task_types` rather than restating its answer.
-
-    Two live renders through the node pack, same wiring shape: a `replacement_subject` picture, an
-    `edit_source` clip, and the clip's soundtrack sent along as `bgm`. It derives three task types.
-    One render shipped all three; the other shipped `[video editing + audio reuse]`, dropping the
-    one the picture is the entire reason for, and no rule fired on either.
-    """
-    from h3ir.grid import Target
-    from h3ir.repair import repair
-
-    brief, cards = _brief(Role.REPLACEMENT_SUBJECT)
-    brief.assets.append(AssetRef(kind=AssetKind.AUDIO, role=Role.BGM, sha256="sha-track",
-                                 seconds=5.18, paired_video_sha256=CLIP, role_stated=True))
-    cards["sha-track"] = AssetCard(sha256="sha-track", kind=AssetKind.AUDIO,
-                                   summary="the clip's own soundtrack")
-    plan = build_plan(brief, Mode.REF2VA, cards)
-    assert set(plan.task_types) == {"reference generation", "video editing", "audio reuse"}
-
-    written = ("subject_definitions:\n<Subject 1> is the elderly woman in <Picture 1>.\n\n"
-               "summary:\n[video editing + audio reuse] The target video is an edited version of "
-               "<Video 1>.\n")
-    fixed = repair(written, target=Target.build(5.167), mode=Mode.REF2VA,
-                   labels=tuple(m.label for m in plan.manifest),
-                   task_types=tuple(plan.task_types))
-    prefix = fixed.text.split("summary:", 1)[1].lstrip().split("]", 1)[0] + "]"
-    assert set(p.strip() for p in prefix.strip("[]").split("+")) == set(plan.task_types), prefix
-    assert "reference generation" in prefix

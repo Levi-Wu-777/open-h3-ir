@@ -73,6 +73,7 @@ def cmd_compile(args) -> int:
                                sizing="max" if args.max_refs else "match"))
     dialogue = [DialogueLine(text=t) for t in (args.say or [])]
     brief = Brief(intent=args.intent, assets=assets, seconds=args.seconds, aspect=args.aspect,
+                  prompt_language=args.prompt_language,
                   dialogue=dialogue, shots=args.shots, silent=args.silent,
                   creativity=args.creativity, director=args.director,
                   loras=[{"id": x} for x in (args.lora or [])])
@@ -248,6 +249,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     c = sub.add_parser("compile")
     c.add_argument("intent")
+    c.add_argument("--prompt-language", default="English",
+                   help="language for prompt prose (e.g. zh-CN, 中文, or auto to follow the request)")
     c.add_argument("--seconds", type=float, default=5.0)
     c.add_argument("--aspect", default="16:9")
     c.add_argument("--image", action="append", metavar="PATH[:note]")

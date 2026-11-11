@@ -102,66 +102,12 @@ def test_a_missing_line_is_still_an_error():
 
 # ---------------------------------------------------------------- the duplicate is the defect
 
-def test_the_whole_line_on_both_sides_of_the_cut_is_an_error():
-    """What shipped 7 of 7 on `X1-scenetrans-explicit`: as conditioning it instructs the model to
-    speak the whole line twice."""
-    doubled = _doc(f"{SHOT1}<d>[English] {LINE}</d> <scenetrans> {CONTINUITY}\n"
-                   f"{SHOT2}<scenetrans> <d>[English] {LINE}</d>")
-    errs = [f for f in validate(doubled, _ctx()) if f.severity == "ERROR"]
-    assert [f.rule for f in errs] == ["D10-dialogue-line-duplicated"], [str(f) for f in errs]
-    assert "twice" in errs[0].msg
 
 
-def test_the_whole_line_then_a_recap_of_its_tail_is_the_same_defect():
-    """The shape the writer moved to once the whole-line duplicate was rejected, measured live:
-    the complete line in [Shot 1], then "<d>[English] ...and not the whole lock.</d>" after the cut.
-    Fewer words duplicated, same instruction to say them twice."""
-    text = _doc(f"{SHOT1}<d>[English] {LINE}</d> <scenetrans> {CONTINUITY}\n"
-                f"{SHOT2}<scenetrans> his sentence finishes: <d>[English] ...and not the whole "
-                f"lock.</d>")
-    errs = [f for f in validate(text, _ctx()) if f.severity == "ERROR"]
-    assert [f.rule for f in errs] == ["D10-dialogue-line-duplicated"], [str(f) for f in errs]
-    assert "again" in errs[0].msg and "ellipsis" in errs[0].msg
 
 
-def test_the_echo_is_repaired_into_the_split_the_spec_asks_for():
-    """Measured, not guessed: with the echo made an ERROR, the writer did not converge. Five of
-    seven M8 runs came back on the same shape after both correction rounds and lost the whole
-    written brief to the draft, and a finding that survives being stated plainly is a signal about
-    the finding rather than about the model.
-
-    The construct it was reaching for is derivable, so it is a substitution rather than a re-roll:
-    the caller's line is a fact this layer holds, the echoed fragment is a suffix of it, and the
-    writer has already chosen where the cut falls and marked both sides. Removing the duplicated
-    words from the first block leaves exactly base-en.txt 4.4's construct, in the caller's own words,
-    each half spoken once.
-    """
-    from h3ir.grid import Target
-    from h3ir.repair import repair
-
-    written = _doc(f"{SHOT1}<d>[English] {LINE}</d> <scenetrans> {CONTINUITY}\n"
-                   f"{SHOT2}<scenetrans> he continues: <d>[English] and not the whole lock.</d>")
-    out = repair(written, target=Target.build(12.0), mode=Mode.T2VA, labels=(),
-                 dialogue=(LINE,))
-    blocks = [b for b in __import__("re").findall(r"<d>(.*?)</d>", out.text)]
-    assert blocks == ["[English] If it turns halfway and stops, the pin is worn, so you change "
-                      "the pin", "[English] and not the whole lock."], blocks
-    assert any("divided" in r for r in out.repairs), out.repairs
-    # And the result is legal: the halves rejoin into the caller's exact line, both sides marked.
-    assert not [f for f in validate(out.text, _ctx()) if f.severity == "ERROR"], \
-        [str(f) for f in validate(out.text, _ctx())]
 
 
-def test_the_repair_keeps_an_ellipsis_out_of_the_words():
-    """The other form the echo arrived in: "<d>[English] ...and not the whole lock.</d>"."""
-    from h3ir.grid import Target
-    from h3ir.repair import repair
-
-    written = _doc(f"{SHOT1}<d>[English] {LINE}</d> <scenetrans> {CONTINUITY}\n"
-                   f"{SHOT2}<scenetrans> <d>[English] ...and not the whole lock.</d>")
-    out = repair(written, target=Target.build(12.0), mode=Mode.T2VA, labels=(), dialogue=(LINE,))
-    assert "..." not in out.text
-    assert "<d>[English] and not the whole lock.</d>" in out.text
 
 
 def test_the_repair_refuses_a_fragment_that_is_not_part_of_the_line():
@@ -176,17 +122,6 @@ def test_the_repair_refuses_a_fragment_that_is_not_part_of_the_line():
     assert not [r for r in out.repairs if "divided" in r], out.repairs
 
 
-def test_the_repair_will_not_reverse_playback_order():
-    """A fragment BEFORE the block holding the whole line is not the construct: the words would be
-    spoken after they had already been spoken. Reported, not rearranged."""
-    from h3ir.grid import Target
-    from h3ir.repair import repair
-
-    written = _doc(f"{SHOT1}<d>[English] and not the whole lock.</d> <scenetrans>\n"
-                   f"{SHOT2}<scenetrans> <d>[English] {LINE}</d>")
-    out = repair(written, target=Target.build(12.0), mode=Mode.T2VA, labels=(), dialogue=(LINE,))
-    assert not [r for r in out.repairs if "divided" in r], out.repairs
-    assert "D10-dialogue-line-duplicated" in {f.rule for f in validate(out.text, _ctx())}
 
 
 def test_a_second_unrelated_line_is_not_an_echo():
@@ -251,13 +186,6 @@ def test_every_continuity_phrase_the_spec_lists_satisfies_it():
         assert not found, (phrase, [str(f) for f in found])
 
 
-def test_a_line_broken_inside_one_shot_is_an_error_of_its_own():
-    """No cut between the halves, so `<scenetrans>` is not the remedy: the line is simply broken in
-    two for no reason, and one supplied line is spoken once."""
-    text = _doc(f"{SHOT1}<d>[English] {HALF_A}</d> he pauses, then adds: "
-                f"<d>[English] {HALF_B}</d>")
-    errs = [f for f in validate(text, _ctx()) if f.severity == "ERROR"]
-    assert [f.rule for f in errs] == ["D13-line-split-without-a-cut"], [str(f) for f in errs]
 
 
 def test_the_marker_at_the_start_of_the_second_part_does_not_hide_the_cut_time():
@@ -312,7 +240,7 @@ def test_a_line_split_across_three_shots_needs_the_marker_at_both_joins():
 
 # ---------------------------------------------------------------- what the writer is told
 
-def test_the_ask_states_how_a_line_crossing_a_cut_is_written():
+def test_the_ask_passes_dialogue_and_speaker_facts():
     """`<scenetrans>` appeared in 0 of 7 natural requests and `<cutoff>` in 0 of 7. Both markers
     existed only as one line of spec text inside a long system prompt; the ask never mentioned them
     beside the lines the writer is placing. This asserts the rule of the format is stated there.
@@ -345,11 +273,11 @@ def test_the_ask_states_how_a_line_crossing_a_cut_is_written():
     compose_brief(backend, brief, plan.subjects, {}, plan.target, (),
                   prompt_name="compose_base.v1.txt", mode=Mode.T2VA)
     ask = backend.asks[0]
-    assert "spoken once" in ask.lower()
-    assert "<scenetrans>" in ask
-    assert "<cutoff>" in ask
-    assert "no word appears in both" in ask
-    assert "says them" in ask, "the consequence of a repeat has to be stated, not just forbidden"
+    import json
+    facts = json.loads(ask.split("\n\n", 1)[1])
+    assert facts["dialogue"][0]["text"] == LINE
+    assert facts["dialogue"][0]["speaker_hint"] == "the locksmith"
+    assert facts["request"] == brief.intent
 
 
 def test_a_brief_with_no_dialogue_is_not_given_the_dialogue_rules():

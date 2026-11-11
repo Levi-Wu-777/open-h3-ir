@@ -42,13 +42,12 @@ def test_one_is_not_a_silent_synonym_for_default():
     assert canvas_for_aspect("1:1", 1.0) != canvas_for_aspect("1:1", None)
 
 
-def test_the_service_carries_it_to_the_reported_canvas(monkeypatch):
-    client = TestClient(service.app)
-    # compile would need the model; the request model's own validation is what this checks
-    r = client.post("/v1/briefs", json={"intent": "x", "megapixels": 9.0})
-    assert r.status_code == 422, r.text
-    r = client.post("/v1/briefs", json={"intent": "x", "megapixels": 0.01})
-    assert r.status_code == 422, r.text
+def test_the_service_preserves_explicit_canvas_sizes_without_author_caps():
+    from h3ir.grid import Target
+    for area in (9.0, 0.01):
+        brief = service._to_brief(service.BriefIn(intent="x", megapixels=area))
+        assert brief.megapixels == area
+        assert Target.build(8, brief.aspect, megapixels=brief.megapixels).canvas == canvas_for_aspect(brief.aspect, area)
 
 
 def test_brief_carries_it_into_the_target():

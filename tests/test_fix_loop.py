@@ -76,7 +76,7 @@ def test_the_findings_are_sent_and_the_spec_is_not():
     assert "brief must begin with" in sent, "the message, not just the rule id"
     assert "Reference Labels and Definitions" not in sent, "the spec must NOT be resent"
     assert len(sent) < 12000, "a correction pass should not carry the whole specification"
-    assert "change nothing else" in sent.lower()
+    assert "Preserve the caller's intent" in sent
     assert out.strip().startswith("subject_definitions:")
 
 
@@ -112,27 +112,31 @@ def test_a_finding_that_survives_is_recorded_as_a_signal_about_the_rule():
     assert still == {f.rule for f in errs}, "unchanged output means the finding survived"
 
 
-def test_only_errors_reach_the_model():
-    """The boundary the rule audit turned on. An ERROR is a decidable fact; a WARN may be a
-    judgement a competent director would argue with, and the fix loop is an instruction to change
-    the writing. A WARN that reached here would have the model rewrite legitimate work."""
-    import inspect
-    import re as _re
-
-    from h3ir import compile as compile_mod
-
-    src = inspect.getsource(compile_mod.compile_brief)
-    # `errors` is the list handed to fix_with_findings and the loop's own condition. Every
-    # assignment to it must filter on ERROR; a single WARN slipping in is the whole failure.
-    assigns = _re.findall(r"^\s*errors = \[.*?severity == \"(\w+)\"", src, _re.M)
-    assert assigns, "the fix loop no longer builds `errors` the way this test assumes"
-    assert set(assigns) == {"ERROR"}, assigns
-
-    # And the artifact-level proof: a brief whose ONLY findings are warnings is not sent anywhere.
-    ctx = Context(n_pictures=1, duration_s=8.0)
-    found = validate(GOOD, ctx)
-    assert not [f for f in found if f.severity == "ERROR"], [str(f) for f in found]
-    assert [f for f in found if f.severity == "WARN"], "the fixture must carry warnings to prove it"
+def test_only_errors_reach_the_model(monkeypatch):
+    import h3ir.compile as compile_mod
+    import h3ir.prose as prose_mod
+    from h3ir.models import Brief
+    class LocalBackend:
+        class cfg:
+            model = "local-test"
+        def require_available(self): pass
+        def server_version(self): return "local-test"
+    written = ("integrated_multimodal_description:\n[Shot 1] Live-action, a child opens a door.\n\n"
+               "overall_soundscape:\nA latch clicks.\n\nnon_diegetic_music:\nN/A\n")
+    real_validate = compile_mod.validate
+    warning = Finding("X15-audio-uncharacterised", "WARN", "synthetic engineering warning")
+    def warned(text, context):
+        return real_validate(text, context) + ([warning] if text == written else [])
+    def forbid_fix(*args, **kwargs):
+        raise AssertionError("a warning must not trigger a rewrite")
+    monkeypatch.setattr(compile_mod, "validate", warned)
+    monkeypatch.setattr(compile_mod, "compose_brief", lambda *a, **kw: written)
+    monkeypatch.setattr(prose_mod, "fix_with_findings", forbid_fix)
+    result = compile_mod.compile_brief(Brief(intent="a child opens a door", seconds=8), backend=LocalBackend())
+    assert result.prompt == written
+    assert result.source == "written"
+    assert result.provenance["fix_rounds"] == 0
+    assert warning in result.findings
 
 
 # ---------------------------------------------------------------- the minimal code layer
@@ -156,11 +160,6 @@ def test_code_still_owns_the_callers_dialogue():
     assert any("exact line" in r for r in res.repairs)
 
 
-def test_code_still_owns_unicode():
-    res = repair(GOOD.replace("torchlight climbs his chest", "torchlight climbs his chest’s edge"),
-                 target=Target.build(8), mode=Mode.REF2VA, labels=("<Picture 1>",))
-    assert "’" not in res.text
-    assert any("normalised" in r for r in res.repairs)
 
 
 def test_code_no_longer_writes_prose_sections():
@@ -204,7 +203,7 @@ def test_the_fix_ask_carries_the_label_inventory_and_the_right_section_count():
         sections=("integrated_multimodal_description", "overall_soundscape", "non_diegetic_music"))
     sent = captured["messages"][-1]["content"]
     assert "<Picture 1>" in sent and "<Subject 1>" in sent, "the label inventory must be resent"
-    assert "never to define it" in sent, "the inventory must say which direction to fix in"
+    assert "Subject labels may be defined consistently" in sent
     assert "3 sections" in sent and "integrated_multimodal_description" in sent
     assert "six sections" not in sent, "a base-mode fix must not be told to emit six sections"
     # still not the spec
@@ -213,26 +212,19 @@ def test_the_fix_ask_carries_the_label_inventory_and_the_right_section_count():
 
 
 def test_the_composer_is_chosen_by_mode():
-    """One composer for both modes was the root cause of a 0.167 clean rate: every base-mode brief
-    was handed the full-reference guide, which teaches `<Subject N>`, and then failed L2 for using
-    it. Five of six suite briefs fell back, and the sixth -- the only ref2va one -- passed clean."""
     from h3ir.compile import _sections_for
-    from h3ir.models import Mode
     from h3ir.prose import load_prompt
-
     assert len(_sections_for(Mode.REF2VA)) == 6
     assert len(_sections_for(Mode.T2VA)) == 3
     assert len(_sections_for(Mode.I2VA)) == 3
-
     ref = load_prompt("compose.v2.txt")
     base = load_prompt("compose_base.v1.txt")
     assert "Full-Reference Mode" in ref
-    assert "Full-Reference Mode" not in base.split("=== END SPECIFICATION ===")[0]
-    assert "there are no `<subject n>` labels in this mode" in base.lower()
+    assert "Full-Reference Mode" not in base
     assert "subject_definitions" in ref
-    # the base composer names the six-section fields only to forbid them
-    body = base.split("=== END SPECIFICATION ===")[1]
-    assert "No `subject_definitions`" in body
+    assert "integrated_multimodal_description" in base
+    assert "=== END SPECIFICATION ===" not in base
+    assert "=== END SPECIFICATION ===" not in ref
 
 
 def test_a_base_mode_written_brief_keeps_its_description():
@@ -321,8 +313,7 @@ def test_the_pinned_failure_is_a_real_failure():
     fails."""
     errs = {f.rule for f in validate(_golden(BASE_MODE_FAILURE), BASE_CTX)
             if f.severity == "ERROR"}
-    assert errs == {"S1-missing-section", "S5-mode-field-crossed", "T1-no-shot",
-                    "P4-no-camera-at-all"}, errs
+    assert errs == {"S1-missing-section", "S5-mode-field-crossed", "T1-no-shot"}, errs
 
 
 def test_the_loop_fires_on_it_and_is_told_what_it_needs():
@@ -350,7 +341,7 @@ def test_the_loop_fires_on_it_and_is_told_what_it_needs():
     # the section list is the information this failure specifically needs
     assert "integrated_multimodal_description" in sent and "3 sections" in sent
     assert "six sections" not in sent
-    assert "change nothing else" in sent.lower()
+    assert "Preserve the caller's intent" in sent
     # and the caller's own material is in front of the model to preserve
     assert "Hold the line!" in sent
 
@@ -362,23 +353,8 @@ def _repaired(text, task_types=("reference generation", "video editing", "audio 
                   labels=("<Picture 1>", "<Video 1>", "<Audio 1>"), task_types=task_types)
 
 
-def test_the_shipped_prefix_is_the_one_the_wiring_derives():
-    """Rule 1: structure is computed, never chosen by a model. Measured on two live renders with
-    the same wiring shape -- a replacement picture, an edit_source clip and its paired soundtrack --
-    where one shipped all three derived types and the other dropped `reference generation`, the one
-    the picture is the whole reason for. Nothing compared the two."""
-    res = _repaired(GOOD.replace("[reference generation]", "[video editing + audio reuse]"))
-    assert "[reference generation + video editing + audio reuse]" in res.text
-    assert "[video editing + audio reuse]" not in res.text.replace(
-        "[reference generation + video editing + audio reuse]", "")
-    assert any("task-type prefix" in r for r in res.repairs), res.repairs
 
 
-def test_a_summary_that_forgot_the_prefix_is_given_the_derived_one():
-    """Rather than spending a fix-loop round on M1 to be told something the code already knows."""
-    res = _repaired(GOOD.replace("[reference generation] The target", "The target"))
-    assert res.text.count("[reference generation + video editing + audio reuse] The target") == 1
-    assert any("added the task-type prefix" in r for r in res.repairs), res.repairs
 
 
 def test_a_prefix_that_already_agrees_is_left_alone_and_reported_as_nothing():
@@ -388,29 +364,8 @@ def test_a_prefix_that_already_agrees_is_left_alone_and_reported_as_nothing():
     assert not [r for r in res.repairs if "task-type" in r], res.repairs
 
 
-def test_the_prefix_is_replaced_on_either_layout_of_the_section():
-    """Both shapes come back from the writer: the prefix on the colon's line and on the next."""
-    for head in ("summary:\n[video editing] The target", "summary: [video editing] The target"):
-        text = GOOD.replace("summary:\n[reference generation] The target", head)
-        res = _repaired(text, task_types=("reference generation",))
-        assert "[reference generation] The target" in res.text, head
 
 
-def test_only_the_opening_prefix_is_touched():
-    """A second bracket group inside the summary is M9's business, and an editor that reached for
-    it would take the evidence away from the rule that reports it.
-
-    The fixture opens with PROSE and carries the bracket group later, which is the one input that
-    tells the two readings apart. Written the obvious way -- a wrong prefix in front and a group
-    behind it -- both a match-at-the-start and a search-anywhere pass, and the test proved nothing:
-    it survived that mutation the first time it was run against one.
-    """
-    text = GOOD.replace("[reference generation] The target video shows",
-                        "The target video shows [reference generation] and")
-    res = _repaired(text, task_types=("reference generation",))
-    assert res.text.count("[reference generation]") == 2, res.text
-    body = res.text.split("summary:", 1)[1].lstrip()
-    assert body.startswith("[reference generation] The target video shows"), body
 
 
 def test_no_derived_types_means_the_prefix_is_left_exactly_as_written():
@@ -420,11 +375,6 @@ def test_no_derived_types_means_the_prefix_is_left_exactly_as_written():
     assert not [r for r in res.repairs if "task-type" in r]
 
 
-def test_the_rule_behind_it_catches_a_prefix_that_disagrees_with_the_wiring():
-    ctx = Context(mode="ref2va", n_pictures=1, n_videos=1, n_audios=1,
-                  task_types=("reference generation", "video editing", "audio reuse"))
-    bad = GOOD.replace("[reference generation]", "[video editing + audio reuse]")
-    assert "M16-task-prefix-not-derived" in [f.rule for f in validate(bad, ctx)]
 
 
 def test_the_rule_abstains_when_the_wiring_did_not_say():

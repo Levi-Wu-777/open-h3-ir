@@ -52,7 +52,7 @@ from .shots import PINNED_SHOTS_MAX
 # 2 are interchangeable" -- what it needs to know is whether the particular field, role or limit IT
 # is about to use exists on the other side, and that is answered by comparing the sections, not the
 # number. The number is what a message quotes so two people can say which contract they each have.
-CONTRACT_VERSION = 2
+CONTRACT_VERSION = 3
 
 
 # --------------------------------------------------------------------------- the wire
@@ -95,7 +95,7 @@ ASSET_FIELDS: tuple[str, ...] = (
 # Every top-level key of a request, which is `service.BriefIn`'s field list. Same reasoning, same
 # test.
 BRIEF_FIELDS: tuple[str, ...] = (
-    "intent", "assets", "seconds", "aspect", "megapixels", "dialogue", "onscreen_text", "shots",
+    "intent", "prompt_language", "assets", "seconds", "aspect", "megapixels", "dialogue", "onscreen_text", "shots",
     "loras", "silent", "constraints", "creativity", "director", "director_profile", "effort",
     "seed", "transcripts", "answer",
 )
@@ -146,13 +146,7 @@ ERROR_CODES: dict[str, dict[str, Any]] = {
     "llm-unavailable": {"status": 503, "on": [BRIEFS]},
     "malformed-request": {"status": 422, "on": [BRIEFS]},
     "over-capacity": {"status": 422, "on": [BRIEFS]},
-    "replacement-subject-undefined": {"status": 422, "on": [BRIEFS]},
-    "replacement-target-ambiguous": {"status": 422, "on": [BRIEFS]},
-    "replacement-target-unnamed": {"status": 422, "on": [BRIEFS]},
-    "replaces-without-the-role": {"status": 422, "on": [BRIEFS]},
-    "shots-do-not-fit": {"status": 422, "on": [BRIEFS]},
     "shots-invalid": {"status": 422, "on": [BRIEFS]},
-    "swap-without-edit-source": {"status": 422, "on": [BRIEFS]},
     "unknown-brief": {"status": 404, "on": [BRIEFS]},
     "unknown-field": {"status": 422, "on": [BRIEFS]},
     "unknown-role": {"status": 422, "on": [BRIEFS]},
@@ -344,7 +338,7 @@ def as_js() -> str:
         " */\n",
         f"export const CONTRACT_VERSION = {c['contract_version']};",
         f"export const DIRECTORS_DIGEST = {json.dumps(c['digests']['directors'])};",
-        f"export const MAX_NOTES = {c['limits']['director_notes_max_chars']};",
+        f"export const MAX_NOTES = {json.dumps(c['limits']['director_notes_max_chars'])};",
         "",
         "export const CAMERA_MOVES = " + _js_list(c["camera_moves"]) + ";",
         "",

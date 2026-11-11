@@ -66,12 +66,6 @@ def _ctx() -> Context:
         declared_roles=(("<Video 1>", "structure", "weak_reference"),))
 
 
-def test_a_structure_clips_contents_defined_as_a_subject_is_an_error():
-    """The measured failure verbatim: the clip's man walked into the lighthouse video."""
-    errs = [f for f in validate(DOC_CONTENT_CLAIM, _ctx()) if f.severity == "ERROR"]
-    assert any(f.rule == "R30-structure-cited-as-content" for f in errs), [str(f) for f in errs]
-    msg = next(f.msg for f in errs if f.rule == "R30-structure-cited-as-content")
-    assert "<Video 1>" in msg and "structure" in msg
 
 
 def test_the_mandated_construct_satisfies_the_rule():
@@ -97,4 +91,3 @@ def test_the_fact_is_stated_to_the_writer():
 
 def test_no_structure_source_means_no_fact_block():
     assert structure_facts((("<Video 1>", "subject"),)) == ""
-

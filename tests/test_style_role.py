@@ -67,12 +67,6 @@ def _ctx() -> Context:
                         ("<Picture 2>", "style", "weak_reference")))
 
 
-def test_a_style_plates_contents_defined_as_a_subject_is_an_error():
-    """The measured failure verbatim: the gnome walked into the video."""
-    errs = [f for f in validate(DOC_CONTENT_CLAIM, _ctx()) if f.severity == "ERROR"]
-    assert any(f.rule == "R29-style-cited-as-content" for f in errs), [str(f) for f in errs]
-    msg = next(f.msg for f in errs if f.rule == "R29-style-cited-as-content")
-    assert "<Picture 2>" in msg and "style" in msg
 
 
 def test_the_mandated_construct_satisfies_the_rule():

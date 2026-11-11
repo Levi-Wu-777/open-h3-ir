@@ -29,7 +29,7 @@ dependencies = [
   "fastapi",
   "uvicorn[standard]",
   "pydantic",
-  "httpx",
+  "httpx[socks]",
   "tiktoken",
 ]
 
@@ -42,12 +42,13 @@ dev = ["pytest"]
 # The package page's sidebar is built from these, and without them the only way back to the repo is a
 # link inside the README's own text. They reach the page on the next release, not this one: a
 # version's metadata is as frozen as its description once it is uploaded.
-Homepage = "https://github.com/ruashots/open-h3-ir"
-Documentation = "https://github.com/ruashots/open-h3-ir#readme"
-Issues = "https://github.com/ruashots/open-h3-ir/issues"
+Homepage = "https://github.com/Levi-Wu-777/open-h3-ir"
+Documentation = "https://github.com/Levi-Wu-777/open-h3-ir#readme"
+Issues = "https://github.com/Levi-Wu-777/open-h3-ir/issues"
 
 [project.scripts]
 h3ir = "h3ir.cli:main"
+h3ir-deepseek = "h3ir.deepseek:main"
 
 [tool.setuptools]
 # Explicit, so the golden files and prompt templates cannot be silently left out of an install.

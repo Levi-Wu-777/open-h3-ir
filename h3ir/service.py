@@ -113,11 +113,16 @@ class BriefIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     intent: str
+    prompt_language: str = Field(
+        "English", description="Language for generated prompt prose and sound descriptions. "
+                               "Accepts language names or codes, such as 中文 or zh-CN; auto "
+                               "follows the original request. Structure stays unchanged, and "
+                               "dialogue and on-screen text keep their exact original wording.")
     assets: list[AssetIn] = []
     seconds: float = 5.0
     aspect: str = "16:9"
     megapixels: float | None = Field(
-        None, ge=0.25, le=2.5,
+        None, gt=0, allow_inf_nan=False,
         description="Canvas size as a pixel-area ask, like a resolution picker's 1.5. Omitted "
                     "means H3's native geometry, 768 on the short edge, which is what the model "
                     "was trained at. Larger renders work and cost time and VRAM in proportion; "
@@ -325,6 +330,7 @@ def _to_brief(b: BriefIn) -> Brief:
         assets[0].role = Role.FRAME_ANCHOR_FIRST
 
     return Brief(intent=b.intent, assets=assets, seconds=b.seconds, aspect=b.aspect,
+                 prompt_language=b.prompt_language,
                  megapixels=b.megapixels,
                  dialogue=[DialogueLine(text=d.text, language=d.language,
                                         speaker_hint=d.speaker, voiceover=d.voiceover)

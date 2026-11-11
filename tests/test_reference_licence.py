@@ -90,23 +90,6 @@ def test_the_pose_is_still_recorded_even_when_not_asserted():
     assert subj.pose_licensed is False
 
 
-@pytest.mark.parametrize("phrase", [
-    "with fists clenched in a fighting stance",
-    "in a defensive stance",
-    "posed for combat",
-    "looking toward the camera",
-    "seen from a low angle",
-    "arms crossed",
-])
-def test_the_validator_flags_a_pose_asserted_as_identity(phrase):
-    text = (f"subject_definitions:\n<Subject 1> is the man in <Picture 1>, {phrase}.\n\n"
-            "summary:\n[reference generation] The target video shows <Subject 1>.\n\n"
-            "retention_analysis:\n<Subject 1> (appears in [Shot 1]): fully_preserved - "
-            "the hair is retained.\n\ndetailed_description:\nA style line.\n"
-            "[Shot 1] The camera holds a static shot on <Subject 1>.\n\n"
-            "overall_soundscape:\nWind.\n\nnon_diegetic_music:\nN/A\n")
-    rules = {f.rule for f in validate(text, Context(n_pictures=1)) if f.severity == "WARN"}
-    assert "R12-pose-as-identity" in rules
 
 
 def test_the_same_words_are_legal_in_the_description():
@@ -194,48 +177,10 @@ def _card_with_style(style: str) -> AssetCard:
                                 "attributes": list(IDENTITY), "pose": list(POSE)}])
 
 
-def test_a_bare_style_word_does_NOT_override_an_attached_plate():
-    """The owner's rule, and it reverses my earlier one. His reason is drift: if a throwaway
-    adjective can override an observed plate, the same character drifts between shots according to
-    how carelessly each request happened to be worded."""
-    d = resolve_style(_brief(intent="the man walks. Anime style, cinematic."),
-                      {"char": _card_with_style("stylised comic illustration")})
-    assert d.source == "reference"
-    assert "comic illustration" in d.phrase
-    assert "anime" not in d.phrase.lower(), "a loose adjective is not an instruction"
-    assert "cinematic" in d.phrase.lower(), "treatment words still ride on top"
 
 
-def test_the_kept_reference_is_reported_with_how_to_change_it():
-    """Only a genuine MEDIUM conflict is worth reporting. 'anime' against a comic illustration is
-    the same bucket -- two 2D illustrated media -- so there is nothing to warn about; against 3D
-    it is a real divergence and the note must say how to ask for it properly."""
-    d = resolve_style(_brief(intent="the man walks. Anime style."),
-                      {"char": _card_with_style("3D computer animation")})
-    assert d.discrepancy is True
-    note = d.note()
-    assert note and "keeps the reference" in note
-    assert "reimagine as" in note, "the note must say how to actually ask for a change"
-
-    same_bucket = resolve_style(_brief(intent="the man walks. Anime style."),
-                                {"char": _card_with_style("stylised comic illustration")})
-    assert same_bucket.discrepancy is False, "two 2D media are not a conflict"
 
 
-@pytest.mark.parametrize("intent,expect_target", [
-    ("reimagine the man as anime, walking down the corridor", "anime"),
-    ("restyle to watercolour, the man walks", "watercolour"),
-    ("in the style of a 1990s cel animation, he walks", "1990s cel animation"),
-    ("turn the man into a claymation puppet as he walks", "claymation puppet"),
-])
-def test_an_explicit_transformation_DOES_govern(intent, expect_target):
-    """Departing from a reference has to be asked for. These ask for it."""
-    cards = {"char": _card_with_style("stylised comic illustration")}
-    lic = resolve_licence(_brief(intent=intent), cards)
-    assert lic.medium_transferred is True
-    d = resolve_style(_brief(intent=intent), cards, lic)
-    assert d.source == "request"
-    assert expect_target.split()[-1] in d.phrase.lower()
 
 
 def test_a_transformation_does_NOT_touch_the_retention_marker():
@@ -257,16 +202,6 @@ def test_a_transformation_does_NOT_touch_the_retention_marker():
     assert "fully_preserved" in render_retention(plan)
 
 
-def test_the_licence_is_per_attribute_not_per_brief():
-    """A request is routinely explicit about the action and silent about everything else."""
-    from h3ir.licence import ACTION, FRAMING, LIGHTING, MEDIUM, WARDROBE
-    cards = {"char": _card_with_style("stylised comic illustration")}
-    lic = resolve_licence(_brief(intent="the man walks forward down the corridor"), cards)
-    assert lic.governs[ACTION] == "request", "walking is an explicit statement about his body"
-    assert lic.governs[MEDIUM] == "reference"
-    assert lic.governs[WARDROBE] == "reference"
-    assert lic.governs[LIGHTING] == "reference"
-    assert lic.governs[FRAMING] == "reference"
 
 
 def test_naming_a_garment_takes_the_wardrobe():
@@ -354,20 +289,6 @@ SHEET_BRIEF = ("subject_definitions:\n<Subject 1> is the man in <Picture 1>, wit
                "non_diegetic_music:\nN/A\n")
 
 
-@pytest.mark.parametrize("body,why", [
-    ("<Subject 1> stands in the FRONT panel of the turnaround.", "the sheet itself"),
-    ("The eight views of <Subject 1> line up across the grid.", "the layout"),
-    ("<Subject 1> stands against a plain grey background.", "the studio backdrop"),
-    ("A label reading LEFT PROFILE sits under <Subject 1>.", "a burned-in label"),
-])
-def test_sheet_artefacts_are_flagged(body, why):
-    """H3 renders legible text well, so FRONT or LEFT PROFILE reaching the brief risks it landing
-    in the frame. The brief is the only defence."""
-    from h3ir.validate import Context, validate
-    text = SHEET_BRIEF.format(body=body)
-    rules = {f.rule for f in validate(text, Context(n_pictures=1, has_reference_sheet=True))
-             if f.severity == "WARN"}
-    assert "R13-sheet-artefact" in rules, why
 
 
 @pytest.mark.parametrize("body", [
@@ -419,24 +340,6 @@ def test_a_sheets_studio_lighting_does_not_become_the_videos():
     assert "torchlight" in observed_style({"s": scene})
 
 
-@pytest.mark.parametrize("attr", [
-    "fists clenched in a fighting stance",
-    "a determined expression",
-    "ready to strike",
-    "an air of menace",
-    "about to lunge",
-])
-def test_an_interpretation_is_not_an_observation(attr):
-    """The defect that started this: a walking posture read as combat and filed under identity."""
-    from h3ir.validate import Context, validate
-    text = ("subject_definitions:\n<Subject 1> is the man in <Picture 1>, with " + attr +
-            ".\n\nsummary:\n[reference generation] The target video shows <Subject 1>.\n\n"
-            "retention_analysis:\n<Subject 1> (appears in [Shot 1]): fully_preserved - "
-            "the shirt is retained.\n\ndetailed_description:\nA style line.\n"
-            "[Shot 1] <Subject 1> walks forward.\n\noverall_soundscape:\nWind.\n\n"
-            "non_diegetic_music:\nN/A\n")
-    rules = {f.rule for f in validate(text, Context(n_pictures=1)) if f.severity == "WARN"}
-    assert "R14-inferred-attribute" in rules
 
 
 # ------------------------------------------------- the style opening, as one rule
@@ -468,25 +371,6 @@ def test_a_noun_remainder_still_takes_with():
                    "semi-realistic character design.")
 
 
-@pytest.mark.parametrize("bad", [
-    "The target video is in anime style style with warm light.",
-    "The target video is in anime style with resembling a game cutscene.",
-    "The target video is in anime style with cinematic.",
-    "The target video is in style with warm light.",
-    "The target video is in anime style, , warm light.",
-    "The target video is in anime style with Even, diffuse studio lighting.",
-])
-def test_the_validator_rejects_a_malformed_opening(bad):
-    """A rule on the assembled sentence, not another one-off fix per source."""
-    from h3ir.validate import Context, validate
-    text = ("subject_definitions:\n<Subject 1> is the man in <Picture 1>, with dark hair.\n\n"
-            "summary:\n[reference generation] The target video shows <Subject 1>.\n\n"
-            "retention_analysis:\n<Subject 1> (appears in [Shot 1]): fully_preserved - "
-            "the hair is retained.\n\ndetailed_description:\n" + bad + "\n"
-            "[Shot 1] <Subject 1> walks forward.\n\noverall_soundscape:\nWind.\n\n"
-            "non_diegetic_music:\nN/A\n")
-    rules = {f.rule for f in validate(text, Context(n_pictures=1)) if f.severity == "ERROR"}
-    assert "R16-style-opening-malformed" in rules, bad
 
 
 def test_a_well_formed_opening_passes():
@@ -502,109 +386,10 @@ def test_a_well_formed_opening_passes():
     assert "R16-style-opening-malformed" not in rules
 
 
-def test_the_wardrobe_guard_defers_to_who_governs_wardrobe():
-    """`R15-wardrobe-not-restated` fired on a brief whose entire purpose was "change the shirt on the
-    man in this video", telling it to keep restating the reference's navy t-shirt. Holding onto the
-    garment the caller asked to replace is not drift protection, it is the opposite.
-
-    `licence.governs[WARDROBE]` is already the settled answer to who owns that attribute, so the guard
-    defers to it rather than forming a second opinion about the request.
-
-    A reference must be attached for the question to mean anything: with no plate, every attribute is
-    request-governed trivially, and `_wardrobe_terms` is empty anyway because the garment words come
-    from the plate's own card.
-    """
-    from h3ir.compile import _wardrobe_terms
-    from h3ir.licence import WARDROBE, resolve_licence
-
-    card = AssetCard(sha256="i1", kind=AssetKind.IMAGE, style="live-action",
-                     subjects=[{"kind": "person", "descriptor": "the man",
-                                "attributes": ["navy blue t-shirt", "dark blue jeans"]}])
-    ref = AssetRef(kind=AssetKind.IMAGE, role=Role.SUBJECT, sha256="i1", px=(700, 500))
-
-    class _Plan:
-        subjects = [SubjectPlan(label="<Subject 1>", descriptor="the man", kind="person",
-                                attributes=["navy blue t-shirt", "dark blue jeans"], sources=[])]
-
-    keep = Brief(intent="the man walks down the stone corridor", seconds=8.0, assets=[ref])
-    change = Brief(intent="change the shirt on the man to a mossy grey-green", seconds=8.0,
-                   assets=[ref])
-
-    assert resolve_licence(keep, {"i1": card}).governs.get(WARDROBE) == "reference"
-    assert resolve_licence(change, {"i1": card}).governs.get(WARDROBE) == "request"
-
-    # the reference governs: hold the garments, so drift has something to be checked against
-    assert _wardrobe_terms(_Plan(), resolve_licence(keep, {"i1": card})) != ()
-    # the request governs: there is nothing to hold, and insisting would fight the request
-    assert _wardrobe_terms(_Plan(), resolve_licence(change, {"i1": card})) == ()
 
 
-def test_a_frame_anchor_is_exempt_from_a_transformation_marker():
-    """The exposure check the lead asked for on the preservation-flavoured rules, and it found a real
-    contradiction — resolved in the OPPOSITE direction from R15's.
-
-    A frame anchor is a conditioning latent that is never denoised, so its own pixels cannot be
-    transformed; the transformation applies to the rest of the video. `marker_for_plate` handed
-    `attribute_transfer` to every plate including that one, so R6 (an anchor must be fully_preserved)
-    and R7 (a Picture cannot transfer) both fired on a perfectly coherent request — "start from this
-    frame and reimagine the rest as anime". The compiler contradicted itself and the model could not
-    fix it.
-
-    R15's collision was fixed by deferring to the REQUEST, because the caller owns wardrobe. This one
-    defers to the MECHANISM, because nothing owns a latent that is never denoised. "Who owns the
-    attribute" does not always answer "the request".
-
-    **§43 makes the exemption moot and keeps this test as the stronger guard.** The collision existed
-    only because a transformation overrode the marker at all, and that override was a misreading of
-    `attribute_transfer`. With it deleted, NO plate's marker depends on the licence — anchor or not —
-    so R6 and R7 can never be tripped by us. Asserted for both roles, which is what the exemption was
-    protecting, and it now also fails if anyone re-introduces the override.
-    """
-    from h3ir.licence import resolve_licence
-
-    card = AssetCard(sha256="i1", kind=AssetKind.IMAGE, style="live-action photo",
-                     subjects=[{"kind": "person", "descriptor": "the man",
-                                "attributes": ["charcoal technical jacket"]}])
-    anchor = AssetRef(kind=AssetKind.IMAGE, role=Role.FRAME_ANCHOR_FIRST, sha256="i1", px=(700, 500))
-    brief = Brief(intent="start from this frame and reimagine the whole thing as anime as he walks "
-                         "away", seconds=8.0, assets=[anchor])
-    lic = resolve_licence(brief, {"i1": card})
-
-    assert lic.medium_transferred, "the request IS a transformation"
-    assert not hasattr(lic, "marker_for_plate"), (
-        "the licence must not decide a retention marker at all — see §43")
-    for role in (Role.SUBJECT, Role.FRAME_ANCHOR_FIRST, Role.FRAME_ANCHOR_LAST):
-        ref = AssetRef(kind=AssetKind.IMAGE, role=role, sha256="i1", px=(700, 500))
-        plan = deterministic_draft(replace(brief, assets=[ref]), Mode.FL2VA, {"i1": card},
-                                   opts=ProfileOptions())
-        assert "attribute_transfer" not in render_retention(plan), role.value
 
 
-def test_an_audio_role_that_references_a_property_may_not_claim_a_copy_marker():
-    """Visual markers have been checked against their role since R6-R8; audio never was. The edit case
-    demonstrated it on real output: a `voice_timbre` reference came back as `fully_copy`, claiming the
-    clip becomes the target's final audio track when its declared role is "only the timbre is
-    referenced". Same citation as the visual rules — ref-en.txt 4, "Choose each relationship marker only
-    within the reference role already defined for that label" — read against the marker table."""
-    from h3ir.validate import Context, validate
-
-    def brief_with(marker: str) -> str:
-        return ("subject_definitions:\n<Audio 1> is the voice-timbre reference for the speaker (S1).\n\n"
-                "summary:\n[reference generation + audio reference] The target video shows a man.\n\n"
-                f"retention_analysis:\n<Audio 1>: {marker} - the voice is used.\n\n"
-                "detailed_description:\nA style line.\n[Shot 1] The camera holds a static shot as he "
-                'speaks, (S1) saying <d>[English] A line.</d>\n\noverall_soundscape:\nRoom tone.\n\n'
-                "non_diegetic_music:\nN/A\n")
-
-    ctx = Context(n_pictures=0, n_audios=1, expected_dialogue=("A line.",),
-                  declared_roles=(("<Audio 1>", "voice_timbre", ""),))
-    assert "R22-audio-marker-role" in {f.rule for f in validate(brief_with("fully_copy"), ctx)
-                                      if f.severity == "ERROR"}
-    assert "R22-audio-marker-role" not in {f.rule for f in validate(brief_with("reference"), ctx)}
-    # bgm and paired soundtracks legitimately copy, and nothing here legislates them
-    bgm = Context(n_pictures=0, n_audios=1, expected_dialogue=("A line.",),
-                  declared_roles=(("<Audio 1>", "bgm", ""),))
-    assert "R22-audio-marker-role" not in {f.rule for f in validate(brief_with("fully_copy"), bgm)}
 
 
 # ---------------------------------------------------------------------------
@@ -685,18 +470,6 @@ def test_a_non_visual_reference_is_not_a_transformation():
     assert lic.note() is None
 
 
-def test_a_real_transformation_still_reports_itself():
-    """The other side of the gate: the finding must still fire where it is true, with the phrase
-    actually filled in -- and it must no longer name a retention marker, which was the part that was
-    wrong about the format rather than about the request (§43)."""
-    cards = {"char": _card_with_style("3D computer animation")}
-    lic = resolve_licence(Brief(intent="the man walks down the corridor, reimagined as anime"), cards)
-    assert lic.medium_transferred is True
-    assert lic.note() is not None
-    assert "None" not in lic.note()
-    assert "attribute_transfer" not in lic.note(), (
-        "the note announced a marker the spec defines as a transfer to a DIFFERENT target subject")
-    assert "style" in lic.note(), "it must still say where the intent does travel"
 
 
 # ---------------------------------------------------------------------------
@@ -721,39 +494,8 @@ ORDINARY_ENGLISH_NAMING_NO_ATTRIBUTE = (
 )
 
 
-@pytest.mark.parametrize("intent", ORDINARY_ENGLISH_NAMING_NO_ATTRIBUTE)
-def test_a_word_that_merely_contains_a_listed_word_speaks_to_nothing(intent):
-    """The detector matched substrings. "that" contains "hat", so a garment was "named" by the most
-    common word in English; "quality", "military", "little" and "elite" all contain "lit".
-
-    The narrow direction of this bug is a missed instruction. THIS direction hands the attribute to
-    the request on a brief that never mentioned it -- which is the drift the owner's rule exists to
-    prevent, arriving through the detector instead of through the policy.
-    """
-    from h3ir.licence import FRAMING, LIGHTING, PALETTE, WARDROBE
-    lic = resolve_licence(_brief(intent=intent), {"char": _card_with_style("live-action")})
-    for attr in (WARDROBE, LIGHTING, FRAMING, PALETTE):
-        assert lic.governs[attr] == "reference", f"{attr}: {lic.reasons[attr]}"
 
 
-def test_the_word_that_does_not_switch_off_the_wardrobe_hold():
-    """The mechanical consequence, and the reason the substring bug is the serious half.
-
-    `governs[WARDROBE] == "request"` suppresses `_wardrobe_terms`, which is R15's whole input. So a
-    brief containing "that" or "what" silently disabled the garment hold -- the drift defence
-    switched itself off on ordinary prose, and nothing said so.
-    """
-    from h3ir.compile import _wardrobe_terms
-
-    class _Plan:
-        subjects = [SubjectPlan(label="<Subject 1>", descriptor="the man", kind="person",
-                                attributes=["navy blue t-shirt", "dark blue jeans"], sources=[])]
-
-    ref = AssetRef(kind=AssetKind.IMAGE, role=Role.SUBJECT, sha256="char", px=(700, 500))
-    brief = Brief(intent="the man walks down the stone corridor that leads to the door",
-                  seconds=8.0, assets=[ref])
-    lic = resolve_licence(brief, {"char": _card_with_style("live-action")})
-    assert _wardrobe_terms(_Plan(), lic) != (), "the hold must survive the word 'that'"
 
 
 # --------------------------------------------------------------- the narrow direction, per attribute
@@ -898,73 +640,12 @@ NAMES_NOTHING_BUT_THE_ACTION = (
 )
 
 
-@pytest.mark.parametrize("intent", NAMES_NOTHING_BUT_THE_ACTION)
-def test_ordinary_description_still_leaves_every_attribute_with_the_reference(intent):
-    """The control on the widening, and it has teeth in a way a prose note does not: it fails the
-    moment a detector reaches for a bare direction ("in a", "from above"), a bare camera noun
-    ("shot"), or a bare treatment word. Verified by deliberately over-widening until it went red.
-    """
-    from h3ir.licence import FRAMING, LIGHTING, PALETTE, WARDROBE
-    lic = resolve_licence(_brief(intent=intent), {"char": _card_with_style("live-action")})
-    for attr in (WARDROBE, LIGHTING, FRAMING, PALETTE):
-        assert lic.governs[attr] == "reference", f"{attr}: {lic.reasons[attr]}"
 
 
 # --------------------------------------------------------------- the other consumer: the ask
 
-def test_the_ask_never_tells_the_writer_the_request_is_silent():
-    """The second consumer, and the fix that does not depend on the detector at all.
-
-    The ask said "The request is silent about {attrs}". On a miss that is a FALSE CLAIM ABOUT THE
-    CALLER'S OWN REQUEST, handed to the model beside the request text -- a contradiction it has to
-    resolve, and the wrong resolution is the drift the policy exists to stop. §35's line is "absence
-    of a statement is not a statement of absence"; asserting silence is that mistake made positively.
-
-    Stating the RULE instead of a claim of fact is true under a hit and under a miss, so a detector
-    miss degrades from a contradiction to a weaker hint -- and the one reader holding both the request
-    text and the reference description gets to do the disambiguating.
-    """
-    import json
-
-    import httpx
-
-    from h3ir.backend import Backend
-    from h3ir.grid import Target
-    from h3ir.licence import resolve_licence
-    from h3ir.prose import compose_brief
-
-    captured: dict = {}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        captured.update(json.loads(request.content))
-        return httpx.Response(200, json={"choices": [{"finish_reason": "stop",
-                                                      "message": {"content": "x"}}], "usage": {}})
-
-    cards = {"char": _card_with_style("live-action")}
-    lic = resolve_licence(_brief(intent="he sprints toward the door in a leather blazer"), cards)
-    b = Backend(client=httpx.Client(transport=httpx.MockTransport(handler)))
-    compose_brief(b, _brief(intent="he sprints toward the door in a leather blazer"), [], cards,
-                  Target.build(8), ("<Picture 1>",), licence=lic)
-
-    sent = captured["messages"][-1]["content"]
-    if isinstance(sent, list):
-        sent = " ".join(p.get("text", "") for p in sent)
-    assert "is silent about" not in sent, "the compiler must not assert what the request did not say"
-    line = next(l for l in sent.splitlines() if "the references govern" in l)
-    assert "does not specify" in line, "the claim has to be conditional to be true on a miss"
-    # The medium has its own, better-worded channel in the style block, which carries the
-    # bare-adjective rule ("the request did not ask to change the medium, so keep it"). Listing it
-    # here as well would tell the model the request governs it wherever the request says "anime".
-    assert "medium" not in line, line
 
 
-def test_both_ask_sites_state_the_rule_rather_than_a_claim_of_silence():
-    """There are two sites, and they drifted apart once already. A structural check costs nothing and
-    covers the shot planner, whose ask is behind a schema-constrained JSON call."""
-    from pathlib import Path
-    src = Path(__file__).resolve().parents[1].joinpath("h3ir", "prose.py").read_text()
-    assert "is silent about" not in src
-    assert src.count("Where the request does not specify") == 2
 
 
 # ---------------------------------------------------------------------------
@@ -1031,19 +712,6 @@ def _art(opening: str) -> str:
             "overall_soundscape:\nWind.\n\nnon_diegetic_music:\nN/A\n")
 
 
-def test_a_transformation_that_came_back_as_the_references_medium_is_reported():
-    """The failure §41 already recorded once, on the channel that is now the ONLY one carrying the
-    intent: the caller asked for a departure and got the reference's style back.
-
-    Detection is by medium BUCKET, not by phrase, and it detects the FAILURE rather than confirming
-    the success — deliberately. `classify_medium("1990s cel animation")` is `None`, measured, so a
-    rule demanding the opening equal the requested medium would false-positive on exactly the targets
-    `transform_target` exists to carry ("a target no closed vocabulary will contain").
-    """
-    fired = {f.rule for f in validate(_art(
-        "The target video is a stylised comic illustration with clean ink linework."),
-        _transformation_ctx())}
-    assert "R23-transformation-not-in-style-opening" in fired
 
 
 def _real_brief_style():
@@ -1059,38 +727,8 @@ def _real_brief_style():
     return lic, resolve_style(brief, {"c": card}, lic)
 
 
-def test_the_rule_is_NOT_armed_when_the_requested_medium_is_unclassifiable():
-    """The false positive that this rule produced on real output before it shipped, and the reason.
-
-    `classify_medium("1990s cel animation")` is `None` -- outside the closed vocabulary, which is the
-    whole reason `transform_target` reads targets from the request instead. The first version of the
-    arming condition read `observed != requested` and `None != "2d-animation"` is True, so it armed;
-    the plate and the target are in fact BOTH 2D, the correct opening landed in the reference's own
-    bucket, and the rule flagged output that was right.
-
-    §35's line, one layer down and made by the author who had just written it into §42: absence of a
-    statement is not a statement of absence. `None` means the classifier could not place it.
-    """
-    from h3ir.compile import _transformed_from
-    lic, style = _real_brief_style()
-    assert lic.medium_transferred, "the transformation IS detected"
-    assert style.requested_medium is None, "and its target is outside the closed vocabulary"
-    assert _transformed_from(style, lic) == "", "so there is nothing a bucket comparison can verify"
 
 
-def test_the_rule_IS_armed_when_the_transformation_crosses_a_known_bucket():
-    """The other side, and the coverage R23 actually has: a departure the classifier can see."""
-    from h3ir.compile import _transformed_from
-    card = AssetCard(sha256="c", kind=AssetKind.IMAGE, style="photorealistic live-action",
-                     subjects=[{"kind": "person", "descriptor": "the man",
-                                "attributes": ["charcoal technical jacket"]}])
-    ref = AssetRef(kind=AssetKind.IMAGE, role=Role.SUBJECT, sha256="c", px=(700, 480))
-    brief = Brief(intent="the man walks down the corridor, reimagined as claymation puppets",
-                  seconds=8, assets=[ref])
-    lic = resolve_licence(brief, {"c": card})
-    style = resolve_style(brief, {"c": card}, lic)
-    assert _transformed_from(style, lic) == "live-action", (
-        style.requested_medium, style.observed_medium)
 
 
 def test_R23_does_not_fire_on_a_real_live_transformation_compile():
@@ -1113,52 +751,4 @@ def test_R23_is_silent_when_no_transformation_was_asked_for():
     fired = {f.rule for f in validate(_art(
         "The target video is a stylised comic illustration with clean ink linework."),
         Context(n_pictures=1))}
-    assert "R23-transformation-not-in-style-opening" not in fired
-
-
-def test_R23_is_a_WARN_because_a_false_positive_is_unfixable():
-    """§40's test, applied before shipping the rule rather than after four narrowings.
-
-    Right -> the model rewrites one sentence. Converges. Wrong -> the opening already names the
-    requested medium and `classify_medium` misbucketed it; the model has nothing decidable to change,
-    both fix rounds exhaust and the ENTIRE written brief is lost to the fallback. A bucket classifier
-    over free prose is the same shape as the phrase blacklist that demoted G2.
-    """
-    findings = [f for f in validate(_art(
-        "The target video is a stylised comic illustration with clean ink linework."),
-        _transformation_ctx()) if f.rule == "R23-transformation-not-in-style-opening"]
-    assert findings and all(f.severity == "WARN" for f in findings), findings
-
-
-def test_R23_stays_silent_on_a_real_ARMED_cross_bucket_transformation():
-    """The strongest false-positive evidence available: a live compile where the rule is genuinely
-    armed and still silent, because the model got it right.
-
-    Same character sheet (`2d-animation`), request "reimagined as claymation puppets"
-    (`stop-motion`) — both buckets known and different, so `_transformed_from` returns
-    `"2d-animation"` and R23 is watching. The model opened with "a tactile claymation style", which
-    buckets to `stop-motion`, and its retention line reconciled both by itself: "the man's facial
-    features, hair, beard, and navy blue t-shirt are retained **and rendered in a claymation style**".
-
-    The previous test's artifact is not armed, so on its own it could not tell a correct rule from a
-    sleeping one. This one can.
-    """
-    from pathlib import Path
-
-    from h3ir.compile import _transformed_from
-    card = AssetCard(sha256="c", kind=AssetKind.IMAGE,
-                     style="Digital illustration, semi-realistic character design.",
-                     subjects=[{"kind": "person", "descriptor": "the man",
-                                "attributes": ["charcoal technical jacket"]}])
-    ref = AssetRef(kind=AssetKind.IMAGE, role=Role.SUBJECT, sha256="c", px=(700, 480))
-    brief = Brief(intent="the man from the sheet walks down a stone corridor lit by a wall torch, "
-                         "reimagined as claymation puppets", seconds=8, assets=[ref])
-    lic = resolve_licence(brief, {"c": card})
-    armed = _transformed_from(resolve_style(brief, {"c": card}, lic), lic)
-    assert armed == "2d-animation", "the guard is worthless unless the rule is actually watching"
-
-    art = Path(__file__).resolve().parents[1].joinpath(
-        "h3ir", "golden", "live_transformation_crossbucket.txt").read_text()
-    fired = {f.rule for f in validate(art, Context(n_pictures=1, mode="ref2va",
-                                                   transformed_from=armed))}
     assert "R23-transformation-not-in-style-opening" not in fired

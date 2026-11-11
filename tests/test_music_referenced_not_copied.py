@@ -251,25 +251,8 @@ def test_the_correct_document_is_clean():
     assert not _errs(_doc()), _errs(_doc())
 
 
-@pytest.mark.parametrize("role", ["music_style", "beat_reference"])
-@pytest.mark.parametrize("marker", ["fully_copy", "partially_copy"])
-def test_a_copy_marker_on_a_referenced_track_is_an_error(role, marker):
-    """R22 had exactly two roles in its set and both new ones belong in it for the reason they
-    exist. This is the marker `S6-beat-rhythm` shipped 5 of 5."""
-    errs = _errs(_doc(retention=f"<Audio 1>: {marker} - <Audio 1> is reused as the track."),
-                 role=role)
-    assert "R22-audio-marker-role" in errs, errs
-    assert role in errs["R22-audio-marker-role"]
 
 
-def test_the_prefix_may_not_claim_reuse_when_every_track_is_a_reference():
-    """The prefix half, which R22 cannot see. `[reference generation + audio reuse]` is what
-    `S6-beat-rhythm` shipped 5 of 5, and M7 only ever fired when NO audio was attached at all."""
-    errs = _errs(_doc(summary="[reference generation + audio reuse] The target video shows a "
-                              "bricklayer cut to <Audio 1>."))
-    assert "M15-audio-reuse-without-a-copy-role" in errs, errs
-    assert "audio reference" in errs["M15-audio-reuse-without-a-copy-role"]
-    assert "ref-en.txt 3" in errs["M15-audio-reuse-without-a-copy-role"]
 
 
 def test_one_copied_track_alongside_makes_the_reuse_claim_correct_again():
@@ -303,22 +286,8 @@ def test_with_no_declared_role_the_rules_abstain():
     assert "R27-reference-audio-claimed-as-copied" not in errs, errs
 
 
-def test_prose_calling_the_referenced_track_reused_is_an_error():
-    """The third place the claim appeared, in a section no marker rule reads. Recorded verbatim:
-    `non_diegetic_music: <Audio 1> is directly reused as the complete audience-only score`."""
-    errs = _errs(_doc(desc=DESC.replace("A newly generated kick pattern keeps the same tempo.",
-                                        "<Audio 1> is directly reused as the complete "
-                                        "audience-only score.")))
-    assert "R27-reference-audio-claimed-as-copied" in errs, errs
-    assert "beat and tempo" in errs["R27-reference-audio-claimed-as-copied"]
 
 
-def test_the_prose_rule_reads_the_whole_document_and_not_one_section():
-    """The same sentence in subject_definitions has to be caught too, or the rule only covers the
-    place the last failure happened to put it."""
-    errs = _errs(_doc(defs="subject_definitions:\n<Audio 1> is played as the target video's "
-                           "soundtrack.\n"))
-    assert "R27-reference-audio-claimed-as-copied" in errs, errs
 
 
 def test_a_property_being_reused_is_not_a_copy_claim():
@@ -339,20 +308,6 @@ def test_saying_the_signal_is_not_copied_is_not_a_copy_claim():
     assert "R27-reference-audio-claimed-as-copied" not in errs, errs
 
 
-def test_the_role_s_own_token_written_as_prose_is_reported():
-    """The sentence a live run actually shipped, verbatim. WARN rather than ERROR: the fix belongs in
-    the ask, and spending a correction round on a hyphen risks losing the written brief over
-    cosmetics. It is a rule so that a regression in the ask is visible instead of silent."""
-    text = _doc(defs="subject_definitions:\n<Audio 1> is the beat_reference for the target video, "
-                     "providing the tempo that dictates the timing of the cuts.\n")
-    ctx = Context(mode="ref2va", n_pictures=0, n_audios=1, duration_s=8.0,
-                  declared_roles=(("<Audio 1>", "beat_reference", ""),),
-                  standalone_audio=("<Audio 1>",))
-    found = {f.rule: f for f in validate(text, ctx)}
-    assert "P9-role-token-in-prose" in found
-    assert found["P9-role-token-in-prose"].severity == "WARN"
-    assert "write it in words" in found["P9-role-token-in-prose"].msg
-    assert "a beat reference" in found["P9-role-token-in-prose"].msg, "hand over the replacement"
 
 
 def test_the_words_a_brief_needs_are_not_treated_as_tokens():

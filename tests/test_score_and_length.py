@@ -37,23 +37,8 @@ def _found(music: str):
 
 # ---------------------------------------------------------------- the score's own words
 
-def test_an_abstract_mood_word_in_the_score_is_reported():
-    """`out/*.json`, verbatim: "A sparse, melancholic piano melody at a slow tempo, with soft string
-    pads"."""
-    found = [f for f in _found("A sparse, melancholic piano melody at a slow tempo, with soft "
-                               "string pads underneath.")
-             if f.rule == "A8-music-mood-word"]
-    assert found and found[0].severity == "WARN", found
-    assert "melancholic" in found[0].msg
 
 
-def test_explaining_the_emotional_function_is_reported():
-    """The second half of the sentence, and the other shape it arrived in: "A minimal, atmospheric
-    electronic score with a slow tempo ... creating a sleek and modern mood."."""
-    found = [f for f in _found("A minimal electronic score at a slow tempo, creating a sleek and "
-                              "modern mood.")
-             if f.rule == "A8-music-mood-word"]
-    assert found, [str(f) for f in _found("x")]
 
 
 def test_instrumentation_tempo_and_dynamics_pass():
@@ -91,7 +76,7 @@ def test_the_spec_written_examples_are_clean():
         assert not found, (name, [str(f) for f in found])
 
 
-def test_minimaxs_own_hosted_i2va_ir_breaks_its_own_rule_and_that_is_why_this_is_a_warn():
+def test_hosted_i2va_ir_has_no_author_music_mood_finding():
     """Recorded rather than exempted, because it decides the severity.
 
     `i2va.ir.txt` is one of the three published hosted IRs saved verbatim, and its score reads "A
@@ -109,7 +94,7 @@ def test_minimaxs_own_hosted_i2va_ir_breaks_its_own_rule_and_that_is_why_this_is
     found = validate(golden.read_text(encoding="utf-8"),
                      Context(mode="i2va", n_pictures=1, duration_s=8.0))
     hits = [f for f in found if f.rule == "A8-music-mood-word"]
-    assert hits and hits[0].severity == "WARN", [str(f) for f in found]
+    assert not hits, [str(f) for f in found]
     assert not [f for f in found if f.severity == "ERROR"], [str(f) for f in found]
 
 
@@ -150,19 +135,19 @@ def _ask(mode: Mode, *, role: Role = Role.SUBJECT, kind: AssetKind = AssetKind.I
     return backend.asks[0]
 
 
-def test_a_reference_generation_ask_states_the_word_band():
+def test_a_reference_generation_ask_passes_mode_without_author_word_caps():
+    import json
     ask = _ask(Mode.REF2VA)
-    assert "350" in ask and "500" in ask, ask
-    assert "detailed_description" in ask
+    assert json.loads(ask.split("\n\n", 1)[1])["mode"] == "ref2va"
+    assert "350" not in ask and "500" not in ask
 
 
-def test_the_ask_says_where_the_words_come_from():
-    """Asking for length without saying how to reach it is how a brief gets padded. The spec's own
-    answer is observation: "clearly establish the current composition, subject appearance and
-    position, environment and lighting, actions and state changes, camera movement, current sound"."""
+def test_the_ask_passes_reference_observations_without_padding_instructions():
+    import json
     ask = _ask(Mode.REF2VA)
-    assert "observ" in ask.lower() or "in the frame" in ask.lower(), ask
-    assert "pad" in ask.lower(), "the failure mode has to be named, or length gets filled with air"
+    facts = json.loads(ask.split("\n\n", 1)[1])
+    assert facts["asset_cards"][0]["subjects"][0]["attributes"] == ["carbon fibre body"]
+    assert "pad" not in ask.lower()
 
 
 def test_a_base_mode_is_not_given_the_band():

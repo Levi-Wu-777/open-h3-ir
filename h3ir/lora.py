@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import get_config
+from .policies import active_findings
 from .models import Brief, Finding, LoraChoice, Mode
 
 log = logging.getLogger("h3ir.lora")
@@ -248,7 +249,7 @@ def load_registry() -> tuple[dict[str, LoraRecord], list[Finding], str]:
             records[rec.id] = rec
             seen.append(f"{rec.id}:{rec.version}:{rec.sha256}")
     revision = hashlib.sha256("|".join(sorted(seen)).encode()).hexdigest()[:12]
-    return records, findings, revision
+    return records, active_findings(findings), revision
 
 
 def resolve_loras(requested: list[dict[str, Any]], mode: Mode,
@@ -273,10 +274,6 @@ def resolve_loras(requested: list[dict[str, Any]], mode: Mode,
                                     f"{rec.id} is trained for {list(rec.h3_variant)} but this "
                                     f"request routes to the {mode.checkpoint} checkpoint"))
             continue
-        bad = _constraint_violation(rec, brief)
-        if bad:
-            findings.append(Finding("W12-lora-constraint", "ERROR", f"{rec.id}: {bad}"))
-            continue
         if rec.file:
             path = Path(rec.source_path).parent / rec.file
             if not path.exists():
@@ -295,22 +292,13 @@ def resolve_loras(requested: list[dict[str, Any]], mode: Mode,
         picked.append(rec)
 
         want = float(req.get("strength", rec.strength["default"]))
-        applied = min(rec.strength["max"], max(rec.strength["min"], want))
-        if abs(applied - want) > 1e-9:
-            findings.append(Finding("W14-lora-strength-clamped", "WARN",
-                                    f"{rec.id}: strength {want} clamped to {applied} "
-                                    f"(declared range {rec.strength['min']}-{rec.strength['max']})"))
+        applied = want
         chosen.append(LoraChoice(id=rec.id, version=rec.version, file_sha256=rec.sha256,
                                  strength_requested=want, strength_applied=applied,
                                  triggers=[dict(t) for t in rec.triggers],
                                  registry_revision=revision))
 
-    for i, a in enumerate(picked):
-        for b in picked[i + 1:]:
-            if b.id in a.conflicts_with or a.id in b.conflicts_with:
-                findings.append(Finding("W15-lora-conflict", "ERROR",
-                                        f"{a.id} and {b.id} declare each other incompatible"))
-    return chosen, findings
+    return chosen, active_findings(findings)
 
 
 def _file_sha(path: Path) -> str:

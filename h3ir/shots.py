@@ -39,13 +39,13 @@ PURPOSES = ("establish", "develop", "reveal", "react", "close", "resolve", "tran
 FRAMINGS = ("extreme wide", "wide", "medium wide", "medium", "medium close", "close",
             "extreme close", "over the shoulder", "low angle", "high angle", "overhead", "pov")
 
-MIN_SHOT_MS = 1200          # below this a cut reads as a glitch rather than an edit
-PINNED_SHOTS_MAX = 10       # the ceiling on an explicit `shots` pin; `auto` has its own
-MAX_SHOTS = 4
+MIN_SHOT_MS = 0
+PINNED_SHOTS_MAX = None
+MAX_SHOTS = None
 CUT_ROUNDING_MS = 100
 
 
-def shot_schema(max_shots: int = MAX_SHOTS, exact: int | None = None) -> dict[str, Any]:
+def shot_schema(max_shots: int | None = MAX_SHOTS, exact: int | None = None) -> dict[str, Any]:
     return {
         "title": "ShotPlan",
         "type": "object",
@@ -62,15 +62,15 @@ def shot_schema(max_shots: int = MAX_SHOTS, exact: int | None = None) -> dict[st
                 # An exact pin closes both ends: guided decoding then cannot return a count the
                 # caller did not ask for, which beats asking nicely every time.
                 "minItems": exact or 1,
-                "maxItems": max_shots,
+                **({"maxItems": exact or max_shots} if exact or max_shots is not None else {}),
                 "items": {
                     "type": "object",
                     "additionalProperties": False,
                     "required": ["purpose", "framing", "action", "what_changes", "camera",
                                  "starts_at_s"],
                     "properties": {
-                        "purpose": {"type": "string", "enum": list(PURPOSES)},
-                        "framing": {"type": "string", "enum": list(FRAMINGS)},
+                        "purpose": {"type": "string"},
+                        "framing": {"type": "string"},
                         "action": {"type": "string"},
                         "what_changes": {"type": "string"},
                         "starts_at_s": {"type": "number"},
@@ -79,9 +79,9 @@ def shot_schema(max_shots: int = MAX_SHOTS, exact: int | None = None) -> dict[st
                             "additionalProperties": False,
                             "required": ["type"],
                             "properties": {
-                                "type": {"type": "string", "enum": list(CAMERA_TYPES)},
-                                "amplitude": {"type": "string", "enum": list(AMPLITUDES)},
-                                "speed": {"type": "string", "enum": list(SPEEDS)},
+                                "type": {"type": "string"},
+                                "amplitude": {"type": "string"},
+                                "speed": {"type": "string"},
                             },
                         },
                         "subjects": {"type": "array", "items": {"type": "string"}},
@@ -214,7 +214,7 @@ class ShotPlanResult:
 
 
 def validate_proposal(raw: dict[str, Any], target: Target, *,
-                      max_shots: int = MAX_SHOTS) -> ShotPlanResult:
+                      max_shots: int | None = MAX_SHOTS) -> ShotPlanResult:
     """Prove the model's edit is legal, repairing only what is unambiguous."""
     res = ShotPlanResult(shots=[], reasoning=str(raw.get("reasoning") or "")[:400],
                          suggestions=[re.sub(r"\s+", " ", str(x)).strip()[:200]
@@ -223,7 +223,7 @@ def validate_proposal(raw: dict[str, Any], target: Target, *,
     if not items:
         res.rejections.append("the proposal contains no shots")
         return res
-    if len(items) > max_shots:
+    if max_shots is not None and len(items) > max_shots:
         res.repairs.append(f"proposed {len(items)} shots, kept the first {max_shots}")
         items = items[:max_shots]
 
@@ -232,20 +232,10 @@ def validate_proposal(raw: dict[str, Any], target: Target, *,
     for i, it in enumerate(items):
         purpose = str(it.get("purpose") or "").lower().strip()
         framing = str(it.get("framing") or "").lower().strip()
-        if purpose not in PURPOSES:
-            res.repairs.append(f"shot {i + 1}: purpose {purpose!r} is not in the vocabulary, "
-                               f"using {'establish' if i == 0 else 'develop'}")
-            purpose = "establish" if i == 0 else "develop"
-        if framing not in FRAMINGS:
-            res.repairs.append(f"shot {i + 1}: framing {framing!r} is not in the vocabulary, "
-                               "using medium")
-            framing = "medium"
         cam = it.get("camera") or {}
         camera = {}
-        if cam.get("type") in CAMERA_TYPES:
-            camera = {"type": cam["type"],
-                      "amplitude": cam.get("amplitude") if cam.get("amplitude") in AMPLITUDES else None,
-                      "speed": cam.get("speed") if cam.get("speed") in SPEEDS else None}
+        if cam.get("type"):
+            camera = dict(cam)
         try:
             start_ms = int(round(float(it.get("starts_at_s") or 0) * 1000))
         except (TypeError, ValueError):
@@ -257,53 +247,13 @@ def validate_proposal(raw: dict[str, Any], target: Target, *,
             start_ms=start_ms, camera=camera,
             subjects=[str(x) for x in (it.get("subjects") or []) if x],
             sync_sound=[re.sub(r"\s+", " ", str(x)).strip()
-                        for x in (it.get("sync_sound") or []) if x][:2]))
+                        for x in (it.get("sync_sound") or []) if x]))
 
-    # --- timing: the model proposes, the grid decides -----------------------------------
-    if shots[0].start_ms != 0:
-        res.repairs.append(f"shot 1 proposed a start of {shots[0].start_ms}ms; a first shot "
-                           "begins at 0")
-        shots[0].start_ms = 0
+    shots[0].start_ms = 0
     for i in range(1, len(shots)):
-        want = int(round(shots[i].start_ms / CUT_ROUNDING_MS)) * CUT_ROUNDING_MS
-        floor = shots[i - 1].start_ms + MIN_SHOT_MS
-        ceiling = total_ms - MIN_SHOT_MS * (len(shots) - i)
-        fixed = max(floor, min(want, ceiling))
-        if fixed != shots[i].start_ms:
-            res.repairs.append(
-                f"shot {i + 1}: cut moved from {shots[i].start_ms}ms to {fixed}ms to stay inside "
-                f"the {total_ms}ms render with {MIN_SHOT_MS}ms per shot")
-        shots[i].start_ms = fixed
-    # `>` not `>=`: a last shot of exactly MIN_SHOT_MS is legal, and the repair above deliberately
-    # clamps to that boundary. Rejecting it threw away a value the repair had just made valid.
-    if len(shots) > 1 and shots[-1].start_ms > total_ms - MIN_SHOT_MS:
-        res.rejections.append(
-            f"the proposed cuts do not fit {len(shots)} shots inside {total_ms}ms")
-        return res
-
-    # --- what the cut carries -------------------------------------------------------------
-    # The similarity rejection that used to live here is GONE. It rejected a whole plan when two
-    # shots shared a framing group, a camera group and half their action groups -- a heuristic over
-    # a taxonomy I wrote, which a director can legitimately disagree with, enforced as a hard
-    # rejection. Shot count is not a defect and similarity is not a defect.
-    #
-    # What survives is the spec's actual sentence, and in this domain it is trivially decidable
-    # because the model states the new information in a field of its own: `what_changes`. A cut with
-    # nothing in that field is a cut that carries nothing, by the planner's own account. A cut whose
-    # new information is word-for-word the previous shot's is the same. Both are facts about the
-    # proposal, not opinions about the edit.
-    prev_changes = ""
-    for i, sh in enumerate(shots, 1):
-        if len(shots) > 1 and not sh.what_changes:
-            res.rejections.append(f"shot {i} states nothing that changes across it")
+        if not shots[i - 1].start_ms < shots[i].start_ms < total_ms:
+            res.rejections.append("cut times must increase strictly inside the video duration")
             return res
-        norm = re.sub(r"[^a-z0-9 ]", "", sh.what_changes.lower()).strip()
-        if i > 1 and norm and norm == prev_changes:
-            res.rejections.append(
-                f"shot {i} states the same change as shot {i - 1} ({sh.what_changes[:60]!r}); the "
-                "cut carries no new information about subject, space, state, viewpoint or time")
-            return res
-        prev_changes = norm
 
     res.shots = shots
     return res

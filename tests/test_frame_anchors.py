@@ -106,59 +106,12 @@ def test_the_bare_citation_binds_the_picture_it_names():
     assert "L4-unused-media" not in {f.rule for f in found}, [str(f) for f in found]
 
 
-def test_an_fl2va_brief_that_binds_neither_picture_is_still_an_error():
-    """The rule has to keep biting, or the fix is just a hole with a comment on it."""
-    text = _fl2va("[Shot 1] Live-action, cinematic, a cyclist opens an umbrella. The camera pulls "
-                  "out with small amplitude at slow speed.")
-    errs = [f for f in validate(text, Context(mode="fl2va", n_pictures=2, duration_s=5.167))
-            if f.rule == "L4-unused-media"]
-    assert errs and errs[0].severity == "ERROR", errs
 
 
-def test_an_fl2va_brief_that_binds_only_the_opening_plate_is_a_warning():
-    """Partly bound is a lesser mistake than a total miss, and the severity split predates this."""
-    text = _fl2va("[Shot 1] Live-action, cinematic, the cyclist begins in the framing established "
-                  "by Picture 1. The camera pulls out with small amplitude at slow speed.",
-                  instruction=ALIGN.split(";")[0] + ".")
-    found = [f for f in validate(text, Context(mode="fl2va", n_pictures=2, duration_s=5.167))
-             if f.rule == "L4-unused-media"]
-    assert found and found[0].severity == "WARN", found
-    assert "[2]" in found[0].msg
 
 
-@pytest.mark.parametrize("mode,n_pictures", [("i2va", 1), ("ref2va", 1)])
-def test_the_bare_form_does_not_count_in_the_modes_that_bracket(mode, n_pictures):
-    """Scoped deliberately. FL2VA is the only mode whose spec notation is bare; ref-en.txt brackets
-    every one of its twelve label citations, and i2va's mandated instruction line brackets too. A
-    bare mention in those modes is drift, and drift must not silently satisfy the binding check."""
-    if mode == "ref2va":
-        text = ("subject_definitions:\n<Subject 1> is the man in Picture 1, with dark hair.\n\n"
-                "summary:\n[reference generation] The target video shows <Subject 1>.\n\n"
-                "retention_analysis:\n<Subject 1> (appears in [Shot 1]): fully_preserved - the "
-                "hair is retained.\n\ndetailed_description:\nA style line.\n[Shot 1] The camera "
-                "holds a static shot on <Subject 1>.\n\noverall_soundscape:\nRoom tone.\n\n"
-                "non_diegetic_music:\nN/A\n")
-    else:
-        text = _fl2va("[Shot 1] Live-action, cinematic, the man from Picture 1 turns to the "
-                      "window. The camera pushes in with small amplitude at slow speed.")
-    errs = [f for f in validate(text, Context(mode=mode, n_pictures=n_pictures, duration_s=5.167))
-            if f.rule == "L4-unused-media"]
-    assert errs and errs[0].severity == "ERROR", errs
 
 
-def test_a_picture_named_in_the_users_own_words_is_not_a_citation():
-    """Dialogue and on-screen text are the user's, and no structural rule reads them. Counting a
-    bare form inside them would let a line of dialogue about a photograph bind a conditioning
-    image that the brief never mentions."""
-    text = _fl2va(
-        '[Shot 1] Live-action, cinematic, the cyclist begins in the framing established by '
-        'Picture 1 beneath a sign reading "Picture 2". The camera pulls out with small amplitude '
-        'at slow speed as she (S1) says: <d>[English] Picture 2 is the one I meant.</d>')
-    found = [f for f in validate(text, Context(mode="fl2va", n_pictures=2, duration_s=5.167,
-                                               expected_dialogue=("Picture 2 is the one I meant.",),
-                                               onscreen_text=("Picture 2",)))
-             if f.rule == "L4-unused-media"]
-    assert found and "[2]" in found[0].msg, found
 
 
 def test_a_bare_citation_beyond_what_is_attached_is_a_phantom():

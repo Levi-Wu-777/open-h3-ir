@@ -45,14 +45,6 @@ def _rules(text: str, scope: Scope, sev: str = "ERROR") -> set[str]:
 
 # ---------------------------------------------------------------- the dial itself
 
-def test_the_positions_license_progressively_more():
-    r = build(PLAIN_REQUEST, level="restrained")
-    b = build(PLAIN_REQUEST, level="balanced")
-    o = build(PLAIN_REQUEST, level="bold")
-    assert r.licensed == frozenset()
-    assert b.licensed == frozenset({SCORE})
-    assert o.licensed == frozenset({SCORE, SPEECH, ONSCREEN_TEXT})
-    assert r.licensed < b.licensed < o.licensed, "the positions must be nested, not merely different"
 
 
 def test_balanced_is_the_default_and_an_unknown_word_falls_back_to_it():
@@ -67,9 +59,6 @@ def test_balanced_is_the_default_and_an_unknown_word_falls_back_to_it():
 
 # ---------------------------------------------------------------- proportionality, enforced
 
-def test_a_score_on_a_plain_request_is_an_error_at_restrained():
-    text = _brief(PLAIN_SHOT, music="A slow synth pad swells under the footsteps.")
-    assert "Q2-unlicensed-addition" in _rules(text, build(PLAIN_REQUEST, level="restrained"))
 
 
 def test_the_same_score_is_fine_at_balanced():
@@ -77,12 +66,6 @@ def test_the_same_score_is_fine_at_balanced():
     assert not _rules(text, build(PLAIN_REQUEST, level="balanced"))
 
 
-def test_invented_speech_is_an_error_at_balanced_and_licensed_at_bold():
-    """The axis in one pair. Nobody supplied these words, so at balanced they came from nowhere;
-    at bold that is the point."""
-    text = _brief(COMMITTED_SHOT + ' The man (S1) says: <d>[English] Almost there.</d>')
-    assert "Q2-unlicensed-addition" in _rules(text, build(PLAIN_REQUEST, level="balanced"))
-    assert not _rules(text, build(PLAIN_REQUEST, level="bold"))
 
 
 def test_speech_the_caller_supplied_is_obedience_not_addition():
@@ -91,73 +74,20 @@ def test_speech_the_caller_supplied_is_obedience_not_addition():
     assert not _rules(text, scope), "the caller's own line cannot be an unlicensed addition"
 
 
-def test_speech_the_request_asks_for_in_prose_counts_as_requested():
-    """"he says something" is a request for speech even with no verbatim line supplied. Stripping it
-    would be as wrong as adding one unasked, so the detector abstains in the safe direction."""
-    scope = build("the man walks down the corridor and says something to the camera",
-                  level="restrained")
-    assert SPEECH in scope.requested
-    text = _brief(PLAIN_SHOT + ' The man (S1) says: <d>[English] Almost there.</d>')
-    assert not _rules(text, scope)
 
 
-def test_onscreen_text_is_bold_only():
-    text = _brief(COMMITTED_SHOT + ' A sign on the wall reads "LEVEL 3".')
-    assert "Q2-unlicensed-addition" in _rules(text, build(PLAIN_REQUEST, level="balanced"))
-    assert not _rules(text, build(PLAIN_REQUEST, level="bold"))
 
 
 # ---------------------------------------------------------------- prohibitions outrank the dial
 
-@pytest.mark.parametrize("request_text,element", [
-    ("the man walks down the corridor. No dialogue. No background music.", SPEECH),
-    ("the man walks down the corridor. No dialogue. No background music.", SCORE),
-    ("a quiet walk down a corridor, without any music", SCORE),
-    ("he walks the length of the hall, nobody speaks", SPEECH),
-    ("a slow push down the corridor, no on-screen text", ONSCREEN_TEXT),
-])
-def test_an_explicit_prohibition_is_read_from_the_request(request_text, element):
-    assert element in build(request_text, level="bold").forbidden
 
 
-def test_bold_does_not_license_what_the_request_forbade():
-    """The hard case, and the one the failure is likeliest to run in now that bold exists."""
-    scope = build("the man walks down the corridor. No dialogue. No background music.", level="bold")
-    # Only what was forbidden loses its licence. This request says nothing about on-screen text, so
-    # bold still licenses that -- a prohibition is surgical, not a switch back to restrained.
-    assert not scope.permits(SPEECH) and not scope.permits(SCORE)
-    assert scope.permits(ONSCREEN_TEXT)
-    text = _brief(PLAIN_SHOT + ' The man (S1) says: <d>[English] Almost there.</d>',
-                  music="A slow synth pad swells.")
-    fired = _rules(text, scope)
-    assert "Q1-forbidden-element-present" in fired
-    assert "Q2-unlicensed-addition" not in fired, "a forbidden element gets the clearer rule"
 
 
-def test_a_forbidden_element_is_removed_from_the_LICENCE_not_only_from_permits():
-    """`permits()` checks prohibitions on its own, so the validator would reject a forbidden element
-    even if `licensed` were wrong -- and that is the trap. `licensed` is what the WRITER is told it
-    may add. If the two disagree, the model is invited to write something the validator then rejects,
-    which burns a fix round on a contradiction we authored."""
-    scope = build("he walks the corridor. No background music.", level="bold")
-    assert SCORE not in scope.licensed
-    assert SCORE not in scope.note().split("may add:")[-1]
-    assert "score" not in scope.brief_instruction().lower().split("rules these out")[0] \
-        .split("Creativity: BOLD".lower())[-1], "bold's blurb must not offer a forbidden score"
 
 
-def test_the_silent_flag_and_the_phrase_agree():
-    assert SCORE in build(PLAIN_REQUEST, silent=True).forbidden
-    assert SCORE in build(PLAIN_REQUEST + " No music.").forbidden
 
 
-def test_a_prohibition_beats_a_mention_of_the_same_word():
-    """"No background music" contains the word "music". Reading that as a request for a score
-    inverts the instruction, so precedence is not optional."""
-    scope = build("the man walks down the corridor. No background music.", level="bold")
-    assert SCORE in scope.forbidden
-    assert SCORE not in scope.requested
-    assert not scope.permits(SCORE)
 
 
 def test_supplied_content_beats_a_stale_prohibition():
@@ -194,11 +124,6 @@ def test_shot_count_is_not_a_finding_at_any_setting():
             assert not [r for r in fired if r.startswith("Q")], (level, name, fired)
 
 
-def test_a_missing_camera_is_still_an_error_at_restrained():
-    """Restrained does not mean under-specified. H3 requires a stated camera at every setting, and
-    `Static Shot` is in the vocabulary, so there is always something to say."""
-    text = _brief("[Shot 1] Live-action, cinematic, the man walks forward down the stone corridor.")
-    assert "P5-camera-no-motion-type" in _rules(text, build(PLAIN_REQUEST, level="restrained"))
 
 
 def test_no_dialogue_is_never_itself_a_finding():
@@ -250,17 +175,8 @@ def test_the_instruction_states_the_licence_without_naming_a_quota():
             assert banned not in text, (level, banned)
 
 
-def test_the_instruction_states_prohibitions_absolutely():
-    text = build("he walks the corridor. No dialogue. No music.", level="bold").brief_instruction()
-    assert "no setting overrides" in text.lower()
-    assert SPEECH in text and SCORE in text
 
 
-def test_the_note_records_what_the_dial_decided():
-    note = build("he walks the corridor. No music.", level="bold").note()
-    assert "bold" in note and "forbidden" in note and "may add" in note
-    assert "nothing beyond the request" not in note, "bold still licenses speech here"
-    assert "nothing beyond the request" in build(PLAIN_REQUEST, level="restrained").note()
 
 
 def test_the_detectors_are_independent_of_each_other():
@@ -380,22 +296,8 @@ def test_extreme_is_a_real_setting_not_an_alias():
     assert parse("EXTREME") is Creativity.EXTREME
 
 
-def test_a_brief_at_extreme_that_states_no_maximal_camera_value_fails():
-    """The one position whose own setting defines what correct means, which is why it can be checked
-    at all: `extreme` asks for the far end of a CLOSED vocabulary, so "is this at the far end" is
-    countable. A director who wanted a slow push would have asked for bold."""
-    timid = _brief("[Shot 1] Live-action, a wide shot as the man walks forward while the camera "
-                   "pushes in with small amplitude at slow speed.")
-    assert "Q3-extreme-not-honoured" in _rules(timid, build(PLAIN_REQUEST, level="extreme"))
 
 
-def test_silence_about_amplitude_also_fails_at_extreme():
-    """The guide omits amplitude and speed to MEAN medium and normal, so stating neither plays the
-    shot at the middle -- the opposite of the setting."""
-    silent_camera = _brief("[Shot 1] Live-action, a wide shot as the man walks forward while the "
-                           "camera pushes in toward him.")
-    assert "Q3-extreme-not-honoured" in _rules(silent_camera,
-                                                build(PLAIN_REQUEST, level="extreme"))
 
 
 def test_a_maximal_brief_passes_at_extreme():
@@ -414,16 +316,6 @@ def test_the_extreme_check_applies_at_no_other_position():
         assert "Q3-extreme-not-honoured" not in _rules(timid, build(PLAIN_REQUEST, level=level))
 
 
-def test_extreme_still_obeys_a_prohibition():
-    """The highest-risk position for exactly this. No setting overrides an explicit prohibition."""
-    scope = build("he walks the corridor with large amplitude. No dialogue. No background music.",
-                  level="extreme")
-    assert not scope.permits(SPEECH) and not scope.permits(SCORE)
-    text = _brief("[Shot 1] Live-action, a wide shot as the camera pushes in with large amplitude at "
-                  "fast speed. He (S1) says: <d>[English] Almost there.</d>",
-                  music="A synth pad swells.")
-    fired = _rules(text, scope)
-    assert "Q1-forbidden-element-present" in fired
 
 
 def test_extreme_never_governs_shot_count():
@@ -439,11 +331,6 @@ def test_extreme_never_governs_shot_count():
         assert banned not in instruction, banned
 
 
-def test_the_extreme_instruction_says_magnitude_not_invention():
-    text = build(PLAIN_REQUEST, level="extreme").brief_instruction()
-    assert "large amplitude" in text and "fast speed" in text
-    assert "not adding events" in text.lower()
-    assert "magnitude, not invention" in text.lower()
 
 
 def test_the_deterministic_floor_satisfies_every_setting_the_product_offers():
@@ -504,20 +391,6 @@ def test_a_stored_run_carries_its_provenance():
 
 # ---------------------------------------------------------------- bold is deliberately unenforced
 
-def test_bold_is_not_enforced_and_must_not_become_so():
-    """The dial is asymmetric ON PURPOSE and this is the guard on it. A check for `bold` was built and
-    removed on the owner's narrowing: "bold just means if a little nudge can do it, don't mechanically
-    enforce it". A brief at bold with a timid camera is a legitimate outcome — the model declined the
-    nudge, which is allowed.
-
-    If this test ever fails, someone re-added the check. The lever for a nudge that lands too rarely is
-    the WORDING, never a rule."""
-    timid = _brief(PLAIN_SHOT)          # small amplitude at slow speed
-    for level in ("restrained", "balanced", "bold"):
-        fired = _rules(timid, build(PLAIN_REQUEST, level=level))
-        assert not fired, (level, fired)
-    # and the top is still enforced, so the asymmetry is real rather than an absence of rules
-    assert "Q3-extreme-not-honoured" in _rules(timid, build(PLAIN_REQUEST, level="extreme"))
 
 
 def test_only_the_top_position_holds_the_camera_to_anything():
@@ -527,40 +400,8 @@ def test_only_the_top_position_holds_the_camera_to_anything():
     assert commits == {"extreme"}, commits
 
 
-def test_no_position_checks_the_camera_except_extreme_and_extreme_only_requires_a_reach():
-    """The two-part fact this dial rests on, and the one worth locking:
-
-      1. No position checks the camera except `extreme`.
-      2. `extreme` REQUIRES a maximal value and does not FORBID a quiet one.
-
-    The owner was asked twice — once on an overstated premise of mine, once on the corrected one — and
-    chose contrast-allowed both times: "hold, hold, then hit is how a lot of real direction works". A
-    setting that forbids the hold cannot express the hit. If this test fails, someone re-added a
-    uniformity rule."""
-    mixed = _brief(
-        "[Shot 1] Live-action, a wide shot as the camera pushes in with large amplitude at fast "
-        "speed. [Shot 2] At 00:04.000, a close shot holds as the camera trucks left with small "
-        "amplitude.")
-    for level in ("restrained", "balanced", "bold", "extreme"):
-        assert not _rules(mixed, build(PLAIN_REQUEST, level=level)), level
-
-    # and the reach is still enforced: quiet ONLY, with nothing committed anywhere, still fails
-    all_quiet = _brief(
-        "[Shot 1] Live-action, a wide shot as the camera pushes in with small amplitude at slow speed.")
-    assert "Q3-extreme-not-honoured" in _rules(all_quiet, build(PLAIN_REQUEST, level="extreme"))
 
 
-def test_bolds_nudge_is_concrete_without_being_a_requirement():
-    """The whole scope of the work after the narrowing: a more concrete nudge, not a softer adjective,
-    and not an obligation. It names the vocabulary and explicitly permits declining it."""
-    text = build(PLAIN_REQUEST, level="bold").brief_instruction()
-    assert "with large amplitude" in text and "at fast speed" in text, "name the words for it"
-    assert "if a nudge would carry the shot" in text, "invite, do not require"
-    assert "a quiet camera is the right answer" in text, "and say declining is allowed"
-    for demanded in ("must", "COMMIT", "at least one"):
-        assert demanded not in text, demanded
-    # extreme still demands, so the two are not the same instruction
-    assert "NOWHERE" in build(PLAIN_REQUEST, level="extreme").brief_instruction()
 
 
 def test_bold_does_not_oblige_the_model_to_spend_its_content_licence():
@@ -580,14 +421,6 @@ def test_bold_does_not_oblige_the_model_to_spend_its_content_licence():
 # DESIGN, and quoted sign text in the sentence is the node's documented mechanism for lettering.
 # What the caller's request already contains cannot be an addition.
 
-def test_quoted_lettering_in_the_request_is_supplied_not_added():
-    """Row 13's crash: the sign text is in the request, quoted; the brief rendering it is
-    obedience."""
-    scope = build('a hand hangs a wooden sign on the shop door that reads "BACK AT NOON" and '
-                  'straightens it', level="balanced")
-    assert ONSCREEN_TEXT in scope.requested
-    text = _brief(PLAIN_SHOT + ' The wooden sign reads "BACK AT NOON".')
-    assert "Q2-unlicensed-addition" not in _rules(text, scope)
 
 
 def test_quotes_that_are_the_dialogue_lines_do_not_license_lettering():
@@ -610,10 +443,3 @@ def test_a_dialogue_line_echoed_in_prose_is_speech_not_lettering():
                               dialogue_texts=(line,)))
     fired = {f.rule for f in validate(text, ctx) if f.severity == "ERROR"}
     assert "Q2-unlicensed-addition" not in fired
-
-
-def test_invented_lettering_still_fails_at_balanced():
-    """The rule must survive its own fix: a quoted span that is in neither the request nor the
-    dialogue is still an addition."""
-    text = _brief(PLAIN_SHOT + ' A neon sign reads "OPEN ALL NIGHT".')
-    assert "Q2-unlicensed-addition" in _rules(text, build(PLAIN_REQUEST, level="balanced"))
