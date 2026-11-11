@@ -742,7 +742,8 @@ def validate(text: str, ctx: Context | None = None, **kw) -> list[Finding]:
     if is_ref:
         analysed = set()
         for line in [l for l in ret.splitlines() if l.strip()]:
-            m = re.match(r"\s*<(Subject|Picture|Video|Audio)\s+(\d+)>\s*(\([^)]*\))?\s*:\s*(\w+)",
+            m = re.match(r"\s*<(Subject|Picture|Video|Audio)\s+(\d+)>\s*"
+                         r"(\([^)]*\)|（[^）]*）)?\s*[:：]\s*(\w+)",
                          line)
             if not m:
                 add("R1-malformed-entry", "ERROR", f"unparseable retention line: {line.strip()[:80]!r}")
@@ -1109,7 +1110,21 @@ def validate(text: str, ctx: Context | None = None, **kw) -> list[Finding]:
                 "soundtrack that does not cover its video desyncs silently")
 
     # ---------------------------------------------------------------- timeline
-    shots = re.findall(r"\[Shot\s+(\d+)\]([^\[]*)", desc)
+    masked = re.sub(r'<d>.*?</d>|"[^"]*"', lambda m: " " * len(m.group(0)), desc,
+                    flags=re.S)
+    declarations = []
+    for marker in re.finditer(r"\[Shot\s+(\d+)\]", masked):
+        before = desc[:marker.start()]
+        after = desc[marker.end():]
+        starts_line = not before.rsplit("\n", 1)[-1].strip()
+        starts_sentence = re.search(r"[.!?。！？;；:：]\s*$", before) is not None
+        starts_after_dialogue = re.search(r"(?:</d>|<scenetrans>)\s*$", before) is not None
+        has_time = re.match(r"\s*,?\s*(?:<scenetrans>\s*)*At\s+\d", after) is not None
+        if not declarations or starts_line or starts_sentence or starts_after_dialogue or has_time:
+            declarations.append(marker)
+    shots = [(marker.group(1), desc[marker.end():declarations[i + 1].start()
+                                   if i + 1 < len(declarations) else len(desc)])
+             for i, marker in enumerate(declarations)]
     if not shots:
         add("T1-no-shot", "ERROR", f"{main_field} has no [Shot N] marker")
     seen: list[tuple[int, float]] = []

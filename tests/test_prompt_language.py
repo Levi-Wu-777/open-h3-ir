@@ -266,3 +266,37 @@ def test_non_english_voiceover_keeps_lips_guidance_without_english_lexical_rejec
     doc = compile_brief(make_brief(), backend=backend, use_cache=False)
     assert doc.ok and doc.source == "written"
     assert "lips remain closed after every voiceover block" in backend.messages[0][0]["content"]
+
+
+@pytest.mark.parametrize("header", [
+    "<Subject 1>（出现在 [Shot 1]、[Shot 2]）：",
+    "<Subject 1> (出现在 [Shot 1])：",
+    "<Subject 1>（出现在 [Shot 1]）:",
+    "<Subject 1>：",
+])
+def test_retention_parser_accepts_equivalent_chinese_punctuation(header):
+    from h3ir.repair import repair
+    body = "fully_preserved - 保留衣服（蓝色：棉布）、表情与原文“你好”。"
+    text = ("subject_definitions:\n<Subject 1> 是 <Picture 1> 中的旅客（身穿蓝衣）。\n"
+            "summary:\n[reference generation] 旅客等候。\nretention_analysis:\n"
+            + header + body + "\ndetailed_description:\n写实影像。\n"
+            "[Shot 1] 旅客看着招牌“营业中（全天：开放）”。\n"
+            "overall_soundscape:\n广播说“你好（请注意：站台）”。\nnon_diegetic_music:\nN/A\n")
+    context = Context(n_pictures=1, prompt_language="zh-CN")
+    assert not {f.rule for f in validate(text, context)} & {"R1-malformed-entry", "R2-illegal-marker"}
+    result = repair(text, target=Target.build(5), mode=Mode.REF2VA, labels=("<Picture 1>",))
+    assert result.text == text
+    assert not result.repairs
+
+
+@pytest.mark.parametrize("entry,rule", [
+    ("<Subject 1>（出现在 [Shot 1]） fully_preserved - 保留蓝衣。", "R1-malformed-entry"),
+    ("<Subject 1>（出现在 [Shot 1]）：完全保留 - 保留蓝衣。", "R2-illegal-marker"),
+    ("<Subject 1>（出现在 [Shot 1]）：invented_relation - 保留蓝衣。", "R2-illegal-marker"),
+])
+def test_retention_punctuation_support_keeps_structure_and_marker_checks(entry, rule):
+    text = ("subject_definitions:\n<Subject 1> 是 <Picture 1> 中的旅客。\n"
+            "summary:\n[reference generation] 旅客等候。\nretention_analysis:\n"
+            + entry + "\ndetailed_description:\n写实影像。\n[Shot 1] 旅客等候。\n"
+            "overall_soundscape:\n车轮轻响。\nnon_diegetic_music:\nN/A\n")
+    assert rule in {f.rule for f in validate(text, Context(n_pictures=1, prompt_language="zh-CN"))}
