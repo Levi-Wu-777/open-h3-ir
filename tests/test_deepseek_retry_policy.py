@@ -40,7 +40,7 @@ def recorded_sleeps(monkeypatch):
 def test_fixed_deepseek_policy_constants():
     assert DEEPSEEK_MAX_ATTEMPTS == 3
     assert DEEPSEEK_RETRY_DELAY_SECONDS == 1
-    assert DEEPSEEK_TIMEOUT_SECONDS == 10
+    assert DEEPSEEK_TIMEOUT_SECONDS == 30
 
 
 def test_other_providers_keep_two_total_attempts_by_default(recorded_sleeps):
@@ -77,7 +77,7 @@ def test_failed_chat_has_three_total_attempts_fixed_delay_and_unchanged_token_bu
     assert len(requests) == 3
     assert recorded_sleeps == [1, 1]
     assert [json.loads(request.content)["max_tokens"] for request in requests] == [77, 77, 77]
-    assert all(set(request.extensions["timeout"].values()) == {10} for request in requests)
+    assert all(set(request.extensions["timeout"].values()) == {30} for request in requests)
 
 
 @pytest.mark.parametrize("status", [400, 401, 403])

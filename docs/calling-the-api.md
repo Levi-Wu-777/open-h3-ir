@@ -150,7 +150,7 @@ ComfyUI pack ships so its director picker works with nothing running.
 
 `ir.diagnostics` 保留每条诊断的规则、级别与说明。`ERROR` 表示需要检查的格式或内容问题，不能用来断言请求未完成；`WARN` 和 `INFO` 也仅供反馈。客户端应允许查看和使用 `needs_review` 稿件，不在后续节点重新按诊断数量拦截。
 
-独立素材最多四路并发分析，结果按输入顺序归集；写作与反馈修正保持依赖顺序。DeepSeek 每次调用最多尝试三次，失败重试前固定等待一秒，单次尝试从发起到完整响应的总 deadline 为十秒，不叠加嵌套重试。
+独立素材最多四路并发分析，结果按输入顺序归集；写作与反馈修正保持依赖顺序。DeepSeek 每次调用最多尝试三次，失败重试前固定等待一秒，单次尝试从发起到完整响应的总 deadline 为三十秒，不叠加嵌套重试。
 
 ## What it only attempts, so do not build a promise on these
 
