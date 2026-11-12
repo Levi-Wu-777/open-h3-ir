@@ -17,6 +17,7 @@ python3 -m venv .venv
 ```
 
 `prompt_language` 默认 `English`，可传 `zh-CN`、`中文`、其他语言名称或 `auto`。正文按指定语言生成，H3 章节键、标签和标记保持原格式；用户对白和屏幕文字保留原文。
+英语（`English`、`en`、`en-US` 等）沿用基座系统提示词，不追加语言覆盖指令；非英语仍追加原有语言指令。
 
 API 示例：
 

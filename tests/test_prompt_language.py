@@ -10,7 +10,7 @@ from h3ir import cli, contract, service
 from h3ir.compile import amend_brief, compile_brief
 from h3ir.grid import Target
 from h3ir.models import Brief, DialogueLine, Finding, Mode, ShotPlan
-from h3ir.prose import beat_schema, beat_sheet, compose_brief, fix_with_findings, plan_shots, shot_body
+from h3ir.prose import beat_schema, beat_sheet, compose_brief, fix_with_findings, load_prompt, plan_shots, shot_body
 from h3ir.validate import Context, validate
 
 CHINESE = '''integrated_multimodal_description:
@@ -92,7 +92,7 @@ def test_cli_passes_selected_language(monkeypatch, capsys):
     assert "车轮轻响" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("language", ["English", "zh-CN", "中文", "Français", "auto"])
+@pytest.mark.parametrize("language", ["zh-CN", "中文", "Français", "auto"])
 def test_composer_appends_language_override_after_official_guide(language):
     backend = CaptureBackend([CHINESE])
     compose_brief(backend, make_brief(language), [], {}, Target.build(5), (), mode=Mode.T2VA)
@@ -112,6 +112,42 @@ def test_composer_appends_language_override_after_official_guide(language):
     user = raw if isinstance(raw, str) else raw[0]["text"]
     assert json.loads(user[user.index("{"):])["prompt_language"] == language
     assert "Wait for me." in user and "OPEN" in user
+
+
+
+@pytest.mark.parametrize("language", ["en-US", "English", "en"])
+def test_english_writing_calls_send_only_the_base_system_prompt(language):
+    brief = make_brief(language)
+    for prompt_name in ("compose.v1.txt", "compose.v2.txt", "compose.v3.txt", "compose_base.v1.txt"):
+        backend = CaptureBackend([CHINESE])
+        compose_brief(backend, brief, [], {}, Target.build(5), (),
+                      prompt_name=prompt_name, mode=Mode.T2VA)
+        assert backend.messages[0][0]["content"] == load_prompt(prompt_name)
+
+    shot = ShotPlan(n=1, start_ms=0, end_ms=5167, dialogue=brief.dialogue)
+    proposal = {"shots": [{"purpose": "establish", "framing": "wide", "action": "waits",
+                           "what_changes": "looks up", "starts_at_s": 0, "camera": {}}]}
+    beats = {"shots": [{"beat": "looks up", "camera": {}, "subjects": [], "sync_sound": []}],
+             "ambient_sound": [], "style_phrase": "Live-action", "summary": "A traveler waits", "music": "N/A"}
+    backend = CaptureBackend(["The traveler looks up, {{D1}}."], [proposal, beats])
+    plan_shots(backend, brief, [], {}, Target.build(5))
+    beat_sheet(backend, brief, Mode.T2VA, [], {}, [shot])
+    shot_body(backend, brief, Mode.T2VA, shot, [], "Live-action")
+    assert [messages[0]["content"] for messages in backend.messages] == [
+        load_prompt(name) for name in ("shotplan.v1.txt", "beatsheet.v1.txt", "prose_shot.v2.txt")]
+
+
+@pytest.mark.parametrize("language", ["en-US", "English", "en"])
+def test_english_compile_correction_does_not_append_a_language_override(language):
+    broken = CHINESE.replace("overall_soundscape:\n车轮轻响，远处传来候车大厅的广播。\n\n", "")
+    backend = CaptureBackend([broken, CHINESE])
+    doc = compile_brief(make_brief(language), backend=backend, use_cache=False)
+    assert doc.provenance["fix_rounds"] == 1
+    assert len(backend.messages) == 2
+    assert backend.messages[0][0]["content"] == load_prompt("compose_base.v1.txt")
+    assert backend.messages[1][0]["content"] == (
+        "You correct mechanical faults in your own H3 brief. You "
+        "make the smallest edit that satisfies each finding.")
 
 
 def test_compile_correction_keeps_language_and_verbatim_words():
