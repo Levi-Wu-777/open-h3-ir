@@ -41,6 +41,9 @@ def load_prompt(name: str) -> str:
 
 def _language_instruction(language: str) -> str:
     selected = language.strip() or "English"
+    normalized = selected.casefold().replace("_", "-")
+    if normalized in {"english", "en"} or normalized.startswith("en-"):
+        return ""
     target = ("Follow the language of the caller's original request for all generated prose"
               if selected.casefold() == "auto"
               else f"Write all generated prose in {json.dumps(selected, ensure_ascii=False)}")
